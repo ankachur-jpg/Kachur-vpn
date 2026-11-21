@@ -15,18 +15,18 @@ internal class AwgConfig(
 
 internal fun AwgConfig.toPortableConfig(): String = buildString {
     appendLine("[Interface]")
-    interfaceSection.appendFields(this) { _, value -> value }
+    interfaceSection.appendFields(this, "=") { _, value -> value }
     for (peer in peers) {
         appendLine("[Peer]")
-        peer.appendFields(this) { _, value -> value }
+        peer.appendFields(this, "=") { _, value -> value }
     }
 }
 
 internal class ConfigSection(private val fields: Map<String, String>) {
     operator fun get(field: String): String? = fields[field.lowercase()]
 
-    internal fun appendFields(destination: StringBuilder, formatValue: (String, String) -> String) {
-        fields.forEach { (name, value) -> destination.appendLine("$name = ${formatValue(name, value)}") }
+    internal fun appendFields(destination: StringBuilder, separator: String = " = ", formatValue: (String, String) -> String) {
+        fields.forEach { (name, value) -> destination.appendLine("$name$separator${formatValue(name, value)}") }
     }
 }
 

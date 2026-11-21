@@ -5,8 +5,20 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.nio.ByteBuffer
 
 class NetworkDiagnosticsTest {
+    @Test
+    fun acceptsOnlyExpectedEchoRepliesForTheRequestedAddressFamily() {
+        val payload = ByteBuffer.allocate(16).apply { putLong(8, 478L) }.array()
+        assertTrue(isEchoReply(payload, 16, false, 478L))
+        assertFalse(isEchoReply(payload, 15, false, 478L))
+        assertFalse(isEchoReply(payload, 16, false, 479L))
+        assertFalse(isEchoReply(payload, 16, true, 478L))
+        payload[0] = 129.toByte()
+        assertTrue(isEchoReply(payload, 16, true, 478L))
+    }
+
     @Test
     fun computesRttJitterAndLossFromActualAttempts() {
         val result = ProbeStats.from(listOf(ProbeReading.Reply(14.0), ProbeReading.NoReply, ProbeReading.Reply(22.0)))

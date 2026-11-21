@@ -55,10 +55,11 @@ internal class NetworkDiagnostics(context: Context) {
     @Suppress("DEPRECATION")
     fun measure(session: DiagnosticSession?, selectedProfile: AwgConfig?, cancelled: () -> Boolean): List<DiagnosticResult> {
         val active = networks.activeNetwork
-        val activeIsVpn = active?.let(networks::getNetworkCapabilities)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        val activeCaps = active?.let(networks::getNetworkCapabilities)
+        val activeIsVpn = activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
         val vpn = active?.takeIf { activeIsVpn && session?.confirmed == true }
         val direct = when {
-            active != null && !activeIsVpn -> active
+            activeCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true && !activeIsVpn -> active
             session != null -> networks.allNetworks.mapNotNull { network ->
                 val caps = networks.getNetworkCapabilities(network) ?: return@mapNotNull null
                 if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) ||
@@ -141,9 +142,7 @@ internal class NetworkDiagnostics(context: Context) {
                 val remaining = (TIMEOUT_MS - elapsedMs(start)).toInt().coerceAtLeast(1)
                 if (Os.poll(arrayOf(poll), remaining) == 0 || (poll.revents.toInt() and OsConstants.POLLIN) == 0) break
                 val count = Os.read(fd, reply, 0, reply.size)
-                if (count >= 16 && (reply[0].toInt() and 255) == (if (ipv6) 129 else 0) &&
-                    reply[1] == 0.toByte() && ByteBuffer.wrap(reply).getLong(8) == nonce
-                ) return ProbeReading.Reply(elapsedMs(start))
+                if (isEchoReply(reply, count, ipv6, nonce)) return ProbeReading.Reply(elapsedMs(start))
             }
             return ProbeReading.NoReply
         } catch (_: Exception) {
@@ -174,3 +173,7 @@ internal class NetworkDiagnostics(context: Context) {
         val random = SecureRandom()
     }
 }
+
+internal fun isEchoReply(bytes: ByteArray, count: Int, ipv6: Boolean, nonce: Long): Boolean =
+    count >= 16 && bytes.size >= 16 && (bytes[0].toInt() and 255) == (if (ipv6) 129 else 0) &&
+        bytes[1] == 0.toByte() && ByteBuffer.wrap(bytes).getLong(8) == nonce

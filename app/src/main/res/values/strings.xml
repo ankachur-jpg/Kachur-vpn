@@ -39,7 +39,7 @@
     <string name="diag_running">Измеряем задержку и ответы…</string>
     <string name="diag_finished">Результаты последней проверки</string>
     <string name="diag_failed">Не удалось выполнить сетевую проверку.</string>
-    <string name="diag_server">Сервер выбранного профиля · напрямую</string>
+    <string name="diag_server">Первый сервер профиля · напрямую</string>
     <string name="diag_first_direct">1.1.1.1 · напрямую</string>
     <string name="diag_first_vpn">1.1.1.1 · через VPN</string>
     <string name="diag_second_direct">9.9.9.9 · напрямую</string>

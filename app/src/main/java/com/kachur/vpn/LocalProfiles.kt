@@ -41,7 +41,7 @@ internal object ProfileJson {
         val id = json.get("key") as? String ?: throw IOException()
         val config = json.get("conf") as? String ?: throw IOException()
         if (name.length !in 1..100 || name.any { it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() } ||
-            !Regex("[0-9a-f]{64}").matches(id) || config.length > AwgConfigParser.MAX_CHARS
+            !Regex("[0-9a-f]{64}").matches(id) || config.length > AwgConfigParser.MAX_CHARS + 1
         ) throw IOException()
         return ImportedProfile(name, AwgConfigParser.parse(config), id)
     }

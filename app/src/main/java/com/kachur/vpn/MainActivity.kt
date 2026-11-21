@@ -5,7 +5,6 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
-import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -38,6 +37,7 @@ import java.util.concurrent.Future
 class MainActivity : ComponentActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
+    private lateinit var activeProfile: TextView
     private lateinit var profileCountry: Button
     private lateinit var autoConnect: Switch
     private lateinit var autoRecovery: Switch
@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
     private val main = Handler(Looper.getMainLooper())
     private var resumed = false
     private var permissionRequest: PermissionRequest? = null
+    private var pendingProfileConnection: ProfileConnectionRequest? = null
     private val permissionPending: Boolean
         get() = permissionRequest?.let { it.dialogLaunched && !it.resultReceived } == true
     private var permissionMessage: Int? = null
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
         val key: String = "vpn-permission-${UUID.randomUUID()}",
         val resetGeneration: Long = VpnConnection.resetGeneration,
         val automatic: Boolean = false,
+        val profileId: String? = null,
     ) {
         var dialogLaunched = false
         var resultReceived = false
@@ -77,20 +79,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        session.record(R.string.import_result_received)
-        when (result.resultCode) {
-            Activity.RESULT_CANCELED -> session.finish(R.string.import_cancelled)
-            Activity.RESULT_OK -> {
-                val data = result.data
-                val uri = data?.data ?: data?.clipData?.takeIf { it.itemCount == 1 }?.getItemAt(0)?.uri
-                when {
-                    uri == null -> session.finish(R.string.no_document_returned)
-                    uri.scheme != ContentResolver.SCHEME_CONTENT ->
-                        session.finish(R.string.unsupported_document_uri)
-                    else -> session.load(applicationContext, uri, getString(R.string.unnamed_profile))
-                }
-            }
-            else -> session.finish(R.string.unexpected_picker_result)
+        session.handlePickerResult(applicationContext, result.resultCode, result.data)
+    }
+
+    private val openProfiles = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val data = result.data ?: return@registerForActivityResult
+            val id = data.getStringExtra(ProfilesActivity.PROFILE_ID) ?: return@registerForActivityResult
+            val generation = data.getLongExtra(ProfilesActivity.STOP_GENERATION, -1L)
+            pendingProfileConnection = ProfileConnectionRequest(id, generation)
+            session.openChecked = true
+            session.syncSavedProfile(applicationContext)
+            connectSelectedProfile()
         }
     }
 
@@ -101,12 +101,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         session = ViewModelProvider(this)[ImportSession::class.java]
+        pendingProfileConnection = savedInstanceState?.let { state ->
+            state.getString(ProfilesActivity.PROFILE_ID)?.let {
+                ProfileConnectionRequest(it, state.getLong(ProfilesActivity.STOP_GENERATION, -1L))
+            }
+        }
         permissionMessage = savedInstanceState?.getInt(PERMISSION_MESSAGE, 0)?.takeIf { it != 0 }
         val savedPermissionKey = savedInstanceState?.getString(PERMISSION_REQUEST_KEY)
         if (savedInstanceState != null && savedPermissionKey != null &&
             savedInstanceState.getLong(PERMISSION_RESET_GENERATION) == VpnConnection.resetGeneration
         ) {
-            permissionRequest = PermissionRequest(savedPermissionKey, automatic = savedInstanceState.getBoolean(PERMISSION_AUTOMATIC)).apply {
+            permissionRequest = PermissionRequest(savedPermissionKey, automatic = savedInstanceState.getBoolean(PERMISSION_AUTOMATIC),
+                profileId = savedInstanceState.getString(PERMISSION_PROFILE)).apply {
                 dialogLaunched = true
                 resultReceived = savedInstanceState.getBoolean(PERMISSION_RESULT_RECEIVED)
             }
@@ -150,6 +156,7 @@ class MainActivity : ComponentActivity() {
             setText(R.string.vpn_reset_connection)
             setOnClickListener {
                 permissionRequest?.let(::clearPermissionRequest)
+                pendingProfileConnection = null
                 permissionMessage = null
                 launchSettings.setPaused(true)
                 VpnConnection.reset()
@@ -175,6 +182,17 @@ class MainActivity : ComponentActivity() {
         layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
         profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
         layout.addView(profileName)
+        activeProfile = label("", 15f, Color.LTGRAY)
+        layout.addView(activeProfile)
+        layout.addView(Button(this).apply {
+            id = R.id.profiles_open
+            setText(R.string.profiles_title)
+            setOnClickListener {
+                if (!session.busy && permissionRequest == null) {
+                    openProfiles.launch(Intent(this@MainActivity, ProfilesActivity::class.java))
+                }
+            }
+        })
         profileCountry = Button(this).apply {
             id = R.id.vpn_profile_country
             setOnClickListener { editCountry() }
@@ -252,7 +270,11 @@ class MainActivity : ComponentActivity() {
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
-        session.onChange = { render(); maybeAutoConnect() }
+        session.onChange = {
+            render()
+            connectSelectedProfile()
+            maybeAutoConnect()
+        }
         render()
         renderNotificationAccess()
         permissionRequest?.let { request ->
@@ -298,6 +320,7 @@ class MainActivity : ComponentActivity() {
         }
         renderConnection()
         renderNotificationAccess()
+        connectSelectedProfile()
         maybeAutoConnect()
     }
 
@@ -325,6 +348,11 @@ class MainActivity : ComponentActivity() {
             outState.putBoolean(PERMISSION_RESULT_RECEIVED, it.resultReceived)
             outState.putLong(PERMISSION_RESET_GENERATION, it.resetGeneration)
             outState.putBoolean(PERMISSION_AUTOMATIC, it.automatic)
+            outState.putString(PERMISSION_PROFILE, it.profileId)
+        }
+        pendingProfileConnection?.let {
+            outState.putString(ProfilesActivity.PROFILE_ID, it.id)
+            outState.putLong(ProfilesActivity.STOP_GENERATION, it.stopGeneration)
         }
         if (permissionRequest == null) permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
     }
@@ -349,15 +377,8 @@ class MainActivity : ComponentActivity() {
         if (session.busy) return
         permissionMessage = null
         session.startPicker()
-        val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            // Providers use different MIME types for .conf. Validate the contents after selection.
-            type = "*/*"
-            putExtra(Intent.EXTRA_LOCAL_ONLY, true)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
         try {
-            openConfig.launch(picker)
+            openConfig.launch(profileDocumentPicker())
         } catch (_: ActivityNotFoundException) {
             session.finish(R.string.picker_unavailable)
         } catch (_: SecurityException) {
@@ -387,6 +408,7 @@ class MainActivity : ComponentActivity() {
         if (manualStopSeen != VpnConnection.manualStopGeneration) {
             manualStopSeen = VpnConnection.manualStopGeneration
             permissionRequest?.let(::clearPermissionRequest)
+            if (pendingProfileConnection?.stopGeneration != manualStopSeen) pendingProfileConnection = null
             permissionMessage = null
         }
         permissionRequest?.takeIf { it.resetGeneration != VpnConnection.resetGeneration }?.let {
@@ -394,6 +416,12 @@ class MainActivity : ComponentActivity() {
             permissionMessage = null
         }
         val phase = VpnConnection.phase
+        val runningId = VpnConnection.activeProfileId
+        val tunnelName = if (runningId != null && runningId != session.profile?.documentKey) {
+            session.catalog.entries.firstOrNull { it.documentKey == runningId }?.name ?: VpnConnection.activeProfileName
+        } else null
+        activeProfile.visibility = if (tunnelName == null) View.GONE else View.VISIBLE
+        if (tunnelName != null) activeProfile.text = getString(R.string.profiles_active_tunnel, tunnelName)
         autoConnect.isChecked = launchSettings.enabled
         autoConnect.setText(if (launchSettings.enabled && launchSettings.paused) R.string.vpn_auto_paused else R.string.vpn_auto_connect)
         autoRecovery.isChecked = launchSettings.recoveryEnabled
@@ -512,8 +540,21 @@ class MainActivity : ComponentActivity() {
         requestConnection(automatic = true)
     }
 
-    private fun requestConnection(automatic: Boolean) {
-        val request = PermissionRequest(automatic = automatic)
+    private fun connectSelectedProfile() {
+        val pending = pendingProfileConnection ?: return
+        if (!resumed || session.busy || permissionRequest != null) return
+        pendingProfileConnection = null
+        if (pending.stopGeneration != VpnConnection.manualStopGeneration) return
+        if (pending.id != session.profile?.documentKey) {
+            showPermissionMessage(R.string.profiles_selection_changed, error = true)
+            return
+        }
+        if (VpnConnection.activeProfileId == pending.id) return
+        requestConnection(automatic = false, profileId = pending.id)
+    }
+
+    private fun requestConnection(automatic: Boolean, profileId: String? = null) {
+        val request = PermissionRequest(automatic = automatic, profileId = profileId)
         permissionRequest = request
         armPermissionDeadline(request, PERMISSION_CHECK_TIMEOUT_MS)
         checkPermission(request, allowDialog = true)
@@ -583,7 +624,9 @@ class MainActivity : ComponentActivity() {
     private fun startWithPermission(request: PermissionRequest) {
         clearPermissionRequest(request)
         permissionMessage = null
-        if (VpnConnection.phase != VpnPhase.IDLE || (request.automatic && (!launchSettings.enabled || launchSettings.paused))) {
+        if ((request.profileId == null && VpnConnection.phase != VpnPhase.IDLE) ||
+            (request.automatic && (!launchSettings.enabled || launchSettings.paused))
+        ) {
             renderConnection()
             return
         }
@@ -591,9 +634,15 @@ class MainActivity : ComponentActivity() {
         val profile = session.profile
         if (profile == null) {
             showPermissionMessage(R.string.vpn_profile_required, error = true)
-        } else {
+        } else if ((request.profileId != null && request.profileId != profile.documentKey) ||
+            session.savedRevision != applicationContext.localProfiles().revision()
+        ) {
+            showPermissionMessage(R.string.profiles_selection_changed, error = true)
+        } else if (VpnConnection.phase == VpnPhase.IDLE) {
             if (!request.automatic) launchSettings.setPaused(false)
-            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey))
+            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey), profile.documentKey, profile.name)
+        } else {
+            VpnConnection.switchProfile(applicationContext, profile, labels.country(profile.documentKey), session.savedRevision)
         }
         renderConnection()
     }
@@ -647,6 +696,7 @@ class MainActivity : ComponentActivity() {
         const val PERMISSION_RESET_GENERATION = "vpn_permission_reset_generation"
         const val PERMISSION_RESULT_RECEIVED = "vpn_permission_result_received"
         const val PERMISSION_AUTOMATIC = "vpn_permission_automatic"
+        const val PERMISSION_PROFILE = "vpn_permission_profile"
         const val PERMISSION_MESSAGE = "vpn_permission_message"
         const val PERMISSION_CHECK_TIMEOUT_MS = 30_000L
         const val PERMISSION_RESULT_TIMEOUT_MS = 60_000L

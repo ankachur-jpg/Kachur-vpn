@@ -1,7 +1,9 @@
 package com.kachur.vpn
 
+import android.app.Activity
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -9,14 +11,17 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import java.io.IOException
 import java.nio.charset.CharacterCodingException
+import java.util.UUID
 
 internal class ImportedProfile(val name: String, val config: AwgConfig, val documentKey: String)
+internal class ProfileConnectionRequest(val id: String, val stopGeneration: Long)
 
 // Retain the profile and in-flight read across rotation without serializing credentials.
 internal class ImportSession : ViewModel() {
     private val main = Handler(Looper.getMainLooper())
-    var profile: ImportedProfile? = null
+    var catalog = ProfileCatalog.EMPTY
         private set
+    val profile: ImportedProfile? get() = catalog.selected
     private val history = mutableListOf<Int>()
     val stages: List<Int> get() = history
     var reading = false
@@ -25,9 +30,13 @@ internal class ImportSession : ViewModel() {
         private set
     var picking = false
         private set
-    val busy: Boolean get() = picking || reading || restoring
+    private var editing = false
+    val busy: Boolean get() = picking || reading || restoring || editing
     var openChecked = false
     private var revision = -1L
+    val savedRevision: Long get() = revision
+    var profileToConnect: ProfileConnectionRequest? = null
+        private set
     var feedback: Int? = null
         private set
     var errorLine: Int? = null
@@ -63,58 +72,99 @@ internal class ImportSession : ViewModel() {
         val store = context.localProfiles()
         val expected = store.revision()
         if (busy || revision == expected) return
-        revision = expected
         if (!store.exists()) {
-            profile = null
+            catalog = ProfileCatalog.EMPTY
+            revision = expected
             return
         }
         restoring = true
         Thread {
-            val saved = try { store.load() } catch (_: Exception) { null }
+            val saved = try { store.read() } catch (_: Exception) { null }
             main.post {
                 restoring = false
-                if (store.revision() != expected) {
+                if (store.revision() != (saved?.revision ?: expected)) {
                     syncSavedProfile(context)
+                    onChange?.invoke()
                 } else {
-                    profile = saved
-                    if (saved == null) showMessage(R.string.profile_restore_error) else onChange?.invoke()
+                    if (saved == null) {
+                        revision = expected
+                        catalog = ProfileCatalog.EMPTY
+                        showMessage(R.string.profile_restore_error)
+                    } else {
+                        apply(saved)
+                        onChange?.invoke()
+                    }
                 }
             }
         }.start()
     }
 
-    fun load(context: Context, uri: Uri, fallbackName: String) {
+    fun handlePickerResult(context: Context, resultCode: Int, data: Intent?) {
+        record(R.string.import_result_received)
+        if (resultCode != Activity.RESULT_OK) {
+            finish(if (resultCode == Activity.RESULT_CANCELED) R.string.import_cancelled else R.string.unexpected_picker_result)
+            return
+        }
+        val clip = data?.clipData
+        val count = clip?.itemCount ?: 0
+        if (count > ProfileCatalog.MAX_PROFILES) {
+            finish(R.string.profiles_limit)
+            return
+        }
+        val uris = buildSet {
+            data?.data?.let { add(it) }
+            if (clip != null) for (i in 0 until count) {
+                val uri = clip.getItemAt(i).uri
+                if (uri == null) {
+                    finish(R.string.unsupported_document_uri)
+                    return
+                }
+                add(uri)
+            }
+        }
+        when {
+            uris.isEmpty() -> finish(R.string.no_document_returned)
+            uris.any { it.scheme != ContentResolver.SCHEME_CONTENT } -> finish(R.string.unsupported_document_uri)
+            uris.size > ProfileCatalog.MAX_PROFILES -> finish(R.string.profiles_limit)
+            else -> load(context, uris)
+        }
+    }
+
+    private fun load(context: Context, uris: Set<Uri>) {
         if (reading) return
         val resolver = context.contentResolver
         picking = false
         reading = true
         record(R.string.import_document_opening)
         Thread {
-            var imported: ImportedProfile? = null
-            var message = R.string.profile_imported
+            var imported: StoredProfiles? = null
+            var message = if (uris.size == 1) R.string.profile_imported else R.string.profiles_imported
             var line: Int? = null
-            var savedRevision: Long? = null
             var accessError = R.string.cannot_open_config
             try {
-                val stream = resolver.openInputStream(uri) ?: throw IOException()
-                accessError = R.string.cannot_read_config
-                main.post { record(R.string.import_document_reading) }
-                val source = stream.use(AwgConfigParser::read)
-                main.post { record(R.string.import_config_parsing) }
-                accessError = R.string.config_parse_failed
-                val config = AwgConfigParser.parse(source)
+                var totalChars = 0
+                val profiles = uris.map { uri ->
+                    accessError = R.string.cannot_open_config
+                    val stream = resolver.openInputStream(uri) ?: throw IOException()
+                    accessError = R.string.cannot_read_config
+                    main.post { record(R.string.import_document_reading) }
+                    val source = stream.use(AwgConfigParser::read)
+                    totalChars += source.length
+                    if (totalChars > ProfileCatalog.MAX_BYTES) throw ProfileLimitException()
+                    main.post { record(R.string.import_config_parsing) }
+                    accessError = R.string.config_parse_failed
+                    val config = AwgConfigParser.parse(source)
 
-                main.post { record(R.string.import_profile_naming) }
-                val name = documentName(resolver, uri)
-                if (name == null) main.post { record(R.string.import_profile_default_name) }
-                val selected = ImportedProfile(name ?: fallbackName, config, VpnProfileLabels.documentKey(uri))
-                imported = selected
-                try {
-                    savedRevision = context.localProfiles().save(selected)
-                } catch (_: Exception) {
-                    VpnLaunchSettings(context).setPaused(true)
-                    message = R.string.profile_imported_without_save
+                    main.post { record(R.string.import_profile_naming) }
+                    val name = documentName(resolver, uri)
+                    if (name == null) main.post { record(R.string.import_profile_default_name) }
+                    val id = (UUID.randomUUID().toString() + UUID.randomUUID().toString()).replace("-", "")
+                    ImportedProfile(name ?: context.getString(R.string.unnamed_profile), config, id)
                 }
+                accessError = R.string.profiles_store_error
+                imported = context.localProfiles().append(profiles)
+            } catch (_: ProfileLimitException) {
+                message = R.string.profiles_limit
             } catch (error: ConfigFormatException) {
                 line = error.line
                 message = when (error.problem) {
@@ -130,24 +180,51 @@ internal class ImportSession : ViewModel() {
                     }
                 }
             } catch (_: CharacterCodingException) {
-                message = R.string.invalid_config_encoding
+                message = if (accessError == R.string.profiles_store_error) accessError else R.string.invalid_config_encoding
             } catch (_: SecurityException) {
-                message = R.string.config_access_denied
+                message = if (accessError == R.string.profiles_store_error) accessError else R.string.config_access_denied
             } catch (_: IOException) {
                 message = accessError
-            } catch (_: RuntimeException) {
+            } catch (_: Exception) {
                 // Provider exception messages can contain the URI.
                 message = accessError
             }
             main.post {
                 imported?.let {
-                    profile = it
-                    revision = savedRevision ?: context.localProfiles().revision()
+                    apply(it)
                     history.add(R.string.import_profile_displayed)
                 }
                 finish(message, line)
             }
         }.start()
+    }
+
+    fun edit(context: Context, connection: ProfileConnectionRequest? = null, change: (LocalProfiles) -> StoredProfiles) {
+        if (busy) return
+        editing = true
+        onChange?.invoke()
+        Thread {
+            val result = try { change(context.localProfiles()) } catch (_: Exception) { null }
+            main.post {
+                editing = false
+                if (result == null) {
+                    showMessage(R.string.profiles_store_error)
+                } else {
+                    apply(result)
+                    profileToConnect = connection
+                    feedback = null
+                    errorLine = null
+                    onChange?.invoke()
+                }
+            }
+        }.start()
+    }
+
+    fun consumeConnection(): ProfileConnectionRequest? = profileToConnect.also { profileToConnect = null }
+
+    private fun apply(state: StoredProfiles) {
+        catalog = state.catalog
+        revision = state.revision
     }
 
     private fun documentName(resolver: ContentResolver, uri: Uri): String? {
@@ -165,4 +242,12 @@ internal class ImportSession : ViewModel() {
         val title = if (trimmed.endsWith(".conf", ignoreCase = true)) trimmed.dropLast(5).trimEnd() else trimmed
         return title.take(100).takeIf { it.isNotEmpty() }
     }
+}
+
+internal fun profileDocumentPicker(): Intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+    addCategory(Intent.CATEGORY_OPENABLE)
+    type = "*/*"
+    putExtra(Intent.EXTRA_LOCAL_ONLY, true)
+    putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 }

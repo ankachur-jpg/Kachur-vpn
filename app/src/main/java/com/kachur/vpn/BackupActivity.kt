@@ -120,7 +120,7 @@ class BackupActivity : ComponentActivity() {
         confirm.isEnabled = !session.busy && VpnConnection.phase == VpnPhase.IDLE
         discard.isEnabled = !session.busy
         if (pending != null) {
-            preview.text = getString(R.string.backup_preview, if (pending.profile == null) 0 else 1,
+            preview.text = getString(R.string.backup_preview, pending.profiles.entries.size,
                 pending.manualRoutes.size, pending.apps.size, pending.sources.size) +
                 if (VpnConnection.phase != VpnPhase.IDLE) "\n" + getString(R.string.backup_disconnect_first) else ""
         }
@@ -238,6 +238,7 @@ internal class BackupSession : ViewModel() {
                 processing = false
                 result.fold(done) { error -> status(when (error) {
                     is BackupFileException -> error.label
+                    is ProfileLimitException -> R.string.profiles_limit
                     is AEADBadTagException -> R.string.backup_auth_error
                     is IOException, is SecurityException -> R.string.backup_file_error
                     else -> R.string.backup_format_error

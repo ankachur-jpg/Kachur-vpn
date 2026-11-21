@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.os.Handler
 import android.os.Looper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -78,6 +79,51 @@ class UnderlyingNetworkMonitorTest {
         } finally {
             monitor.close()
         }
+    }
+
+    @Test
+    fun recoveryWaitsThroughOfflineHandoffAndManualStopClearsTheQueuedRetry() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val main = Looper.getMainLooper()
+        val handler = Handler(main)
+        var releases = 0
+        var starts = 0
+        val recovery = VpnRecovery(handler, state = {}, releaseTunnel = { releases++ },
+            startTunnel = { starts++ }, jitter = { 0L })
+        val monitor = UnderlyingNetworkMonitor(context, handler, recovery::networkChanged)
+        monitor.start()
+        try {
+            val callback = shadowOf(manager).networkCallbacks.single()
+            val wifi = ShadowNetwork.newInstance(30)
+            val mobile = ShadowNetwork.newInstance(31)
+            val looper = shadowOf(main)
+            callback.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.TRANSPORT_WIFI))
+            looper.idleFor(Duration.ofSeconds(2))
+
+            callback.onLost(wifi)
+            callback.onCapabilitiesChanged(mobile, capabilities(NetworkCapabilities.TRANSPORT_CELLULAR, online = false))
+            looper.idleFor(Duration.ofHours(3))
+            assertEquals(1, releases)
+            assertEquals(0, starts)
+
+            callback.onCapabilitiesChanged(mobile, capabilities(NetworkCapabilities.TRANSPORT_CELLULAR))
+            looper.idleFor(Duration.ofSeconds(3))
+            assertEquals(1, starts)
+            assertTrue(recovery.handshakeReceived())
+            callback.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.TRANSPORT_WIFI))
+            looper.idleFor(Duration.ofMillis(1_200))
+            assertTrue(recovery.recovering)
+
+            recovery.cancel()
+            looper.idleFor(Duration.ofMinutes(10))
+            assertFalse(recovery.recovering)
+            assertEquals(1, starts)
+        } finally {
+            monitor.close()
+            recovery.cancel()
+        }
+        assertTrue(shadowOf(manager).networkCallbacks.isEmpty())
     }
 
     private fun capabilities(transport: Int, online: Boolean = true): NetworkCapabilities =

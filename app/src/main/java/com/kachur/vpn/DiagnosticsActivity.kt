@@ -21,15 +21,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class DiagnosticsActivity : ComponentActivity() {
     private val session by lazy { ViewModelProvider(this)[DiagnosticsSession::class.java] }
+    private val visibility by lazy { (application as KachurApplication).visibility }
     private val main = Handler(Looper.getMainLooper())
     private lateinit var run: Button
     private lateinit var feedback: TextView
     private lateinit var measurements: LinearLayout
     private lateinit var chart: PingChart
+    private var resumed = false
+    private var automatic = false
+    private val measurementObserver: () -> Unit = ::updateMeasurementSchedule
     private val tick = object : Runnable {
         override fun run() {
-            if (VpnConnection.phase == VpnPhase.HANDSHAKE) measure()
-            main.postDelayed(this, 30_000L)
+            if (!canMeasure() || VpnConnection.phase != VpnPhase.HANDSHAKE) {
+                updateMeasurementSchedule()
+                return
+            }
+            measure()
+            main.postDelayed(this, AUTOMATIC_INTERVAL_MS)
         }
     }
 
@@ -73,24 +81,45 @@ class DiagnosticsActivity : ComponentActivity() {
         render()
     }
 
-    override fun onStart() {
-        super.onStart()
+    override fun onResume() {
+        super.onResume()
+        resumed = true
         session.onChange = ::render
-        main.postDelayed(tick, 30_000L)
+        VpnConnection.observe(measurementObserver)
+        visibility.observe(measurementObserver)
         render()
     }
 
-    override fun onStop() {
-        main.removeCallbacks(tick)
+    override fun onPause() {
+        resumed = false
+        visibility.removeObserver(measurementObserver)
+        VpnConnection.removeObserver(measurementObserver)
         session.onChange = null
-        session.cancel()
-        super.onStop()
+        updateMeasurementSchedule()
+        super.onPause()
     }
 
-    private fun measure() = session.start(applicationContext, VpnConnection.diagnosticSession())
+    private fun canMeasure(): Boolean = resumed && visibility.screenInteractive
+
+    private fun updateMeasurementSchedule() {
+        val open = canMeasure()
+        if (!open && session.running) {
+            session.cancel()
+            render()
+        }
+        run.isEnabled = open && !session.running
+        val enabled = open && VpnConnection.phase == VpnPhase.HANDSHAKE
+        if (automatic == enabled) return
+        automatic = enabled
+        if (enabled) main.postDelayed(tick, AUTOMATIC_INTERVAL_MS) else main.removeCallbacks(tick)
+    }
+
+    private fun measure() {
+        if (canMeasure()) session.start(applicationContext, VpnConnection.diagnosticSession())
+    }
 
     private fun render() {
-        run.isEnabled = !session.running
+        run.isEnabled = canMeasure() && !session.running
         feedback.setText(session.status)
         measurements.removeAllViews()
         for (result in session.history.lastOrNull().orEmpty()) {
@@ -117,6 +146,10 @@ class DiagnosticsActivity : ComponentActivity() {
     private fun detail(label: Int) = detail(getString(label))
     private fun detail(value: String) { measurements.addView(TextView(this).apply { text = value }) }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    private companion object {
+        const val AUTOMATIC_INTERVAL_MS = 30_000L
+    }
 }
 
 internal class DiagnosticsSession : ViewModel() {
@@ -138,6 +171,7 @@ internal class DiagnosticsSession : ViewModel() {
         status = R.string.diag_running
         onChange?.invoke()
         task = worker.submit {
+            if (token.get()) return@submit
             val result = try {
                 val profile = if (session == null) context.localProfiles().load()?.config else null
                 NetworkDiagnostics(context).measure(session, profile, token::get)

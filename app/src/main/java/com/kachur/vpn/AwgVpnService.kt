@@ -12,7 +12,6 @@ import org.amnezia.awg.config.BadConfigException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ScheduledThreadPoolExecutor
-import java.util.concurrent.TimeUnit
 
 class AwgVpnService : VpnService() {
     private val main = Handler(Looper.getMainLooper())
@@ -22,11 +21,11 @@ class AwgVpnService : VpnService() {
     }
     // Native engine state is owned by the serial backend worker.
     private var backend: GoBackend? = null
-    private var polling: Future<*>? = null
     private var cleanupFailed = false
     private var reportedStatsError = false
 
     private var setup: Future<*>? = null
+    private var polling: VpnStatisticsPolling? = null
     private var attempt = 0L
     private var options: VpnStartOptions? = null
     private var country = ""
@@ -36,7 +35,12 @@ class AwgVpnService : VpnService() {
     @Volatile private var destroyed = false
 
     private val notifications by lazy { VpnNotifications(this) }
-    private val connectionObserver: () -> Unit = ::renderNotification
+    private val visibility by lazy { (application as KachurApplication).visibility }
+    private val visibilityObserver: () -> Unit = ::updateStatisticsCadence
+    private val connectionObserver: () -> Unit = {
+        updateStatisticsCadence()
+        renderNotification()
+    }
     private var foreground = false
     @Volatile private var notificationDismissed = false
     private var postedError = false
@@ -114,6 +118,7 @@ class AwgVpnService : VpnService() {
             main.post {
                 if (!closing) {
                     foreground = true
+                    visibility.observe(visibilityObserver)
                     VpnConnection.foregroundReady(id)
                     watchNetworks()
                     startTunnel(reconnecting = false)
@@ -169,9 +174,9 @@ class AwgVpnService : VpnService() {
                     // A profile without a peer endpoint waits for the peer to initiate.
                     if (reconnecting && !provingRecovery) recovery.finishRecovery()
                     VpnConnection.tunnelReady(id, provingRecovery)
+                    startStatistics(id, token, engine)
                 }
             }
-            polling = backendWorker.scheduleWithFixedDelay({ pollTunnel(id, token, engine) }, 1, 2, TimeUnit.SECONDS)
         } catch (_: TooManyVpnRoutesException) {
             fail(id, token, R.string.ip_vpn_route_limit)
         } catch (_: NoIncludedVpnAppsException) {
@@ -200,6 +205,26 @@ class AwgVpnService : VpnService() {
 
     private fun report(id: Long, token: Long, message: Int) {
         main.post { if (current(token)) VpnConnection.progress(id, message) }
+    }
+
+    private fun startStatistics(id: Long, token: Long, engine: GoBackend) {
+        if (!current(token)) return
+        polling = VpnStatisticsPolling(main, needsFastStatistics()) { completed ->
+            backendWorker.execute {
+                try {
+                    pollTunnel(id, token, engine)
+                } finally {
+                    main.post { completed() }
+                }
+            }
+        }.also { it.start() }
+    }
+
+    private fun needsFastStatistics(): Boolean =
+        VpnConnection.phase == VpnPhase.RECOVERING || visibility.interactiveUi
+
+    private fun updateStatisticsCadence() {
+        polling?.setFast(needsFastStatistics())
     }
 
     private fun pollTunnel(id: Long, token: Long, engine: GoBackend) {
@@ -329,6 +354,8 @@ class AwgVpnService : VpnService() {
 
     private fun invalidateTunnel() {
         generation++
+        polling?.stop()
+        polling = null
         setup?.cancel(true)
         setup = null
     }
@@ -341,6 +368,7 @@ class AwgVpnService : VpnService() {
         if (attempt != 0L) preferences.unregisterOnSharedPreferenceChangeListener(recoveryObserver)
         monitor?.close()
         monitor = null
+        if (foreground) visibility.removeObserver(visibilityObserver)
         VpnConnection.removeObserver(connectionObserver)
         invalidateTunnel()
         backendWorker.execute {
@@ -354,8 +382,6 @@ class AwgVpnService : VpnService() {
     }
 
     private fun releaseEngine() {
-        polling?.cancel(false)
-        polling = null
         try {
             backend?.setState(tunnel, Tunnel.State.DOWN, null)
         } catch (_: Exception) {

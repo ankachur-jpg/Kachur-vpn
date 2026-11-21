@@ -78,6 +78,32 @@ class AwgConfigParserTest {
     }
 
     @Test
+    fun importsAndroidExportsWithRepeatedListsAndUnsetOptionalFields() {
+        val config = parse(example(
+            device = """
+                Address = 192.0.2.2/32
+                Address = 2001:db8::2/128
+                DNS = 192.0.2.53
+                DNS = example.test
+                ExcludedApplications = com.example.one, com.example.two
+                HeaderProtectionKey =
+                I1 =
+                MTU = 0
+            """.trimIndent(),
+            peer = "AllowedIPs = 0.0.0.0/0\nAllowedIPs = ::/0",
+        ))
+        assertEquals("192.0.2.2/32, 2001:db8::2/128", config.interfaceSection["Address"])
+        assertEquals("192.0.2.53, example.test", config.interfaceSection["DNS"])
+        assertEquals("com.example.one, com.example.two", config.interfaceSection["ExcludedApplications"])
+        val included = parse(example(device = "IncludedApplications = com.example.three"))
+        assertEquals("com.example.three", included.interfaceSection["IncludedApplications"])
+        assertEquals("0", config.interfaceSection["MTU"])
+        assertEquals(null, config.interfaceSection["HeaderProtectionKey"])
+        assertEquals(null, config.interfaceSection["I1"])
+        assertEquals("0.0.0.0/0, ::/0", config.peers.single()["AllowedIPs"])
+    }
+
+    @Test
     fun rejectsInvalidAwgValuesAndConflicts() {
         listOf(
             "H1 = 4294967296",
@@ -93,6 +119,7 @@ class AwgConfigParserTest {
             "RekeyTimeout = 8-",
             "MaxHandshakeAttempts = 4294967296",
             "DisableCookies = maybe",
+            "IncludedApplications = com.example.one\nExcludedApplications = com.example.two",
         ).forEach { device ->
             assertThrows(ConfigFormatException::class.java) { parse(example(device = device)) }
         }

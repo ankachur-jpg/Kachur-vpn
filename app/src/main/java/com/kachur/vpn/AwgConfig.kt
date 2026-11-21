@@ -17,7 +17,10 @@ internal class ConfigSection(private val fields: Map<String, String>) {
     operator fun get(field: String): String? = fields[field.lowercase()]
 }
 
-internal class ConfigFormatException(val line: Int? = null) : Exception("Invalid VPN configuration")
+internal class ConfigFormatException(
+    val line: Int? = null,
+    val unsupportedOption: Boolean = false,
+) : Exception("Invalid VPN configuration")
 
 internal object AwgConfigParser {
     internal const val MAX_CHARS = 256 * 1024
@@ -27,6 +30,10 @@ internal object AwgConfigParser {
     private val base64Key = Regex("[A-Za-z0-9+/]{43}=")
     private val ipv6 = Regex("[0-9a-fA-F:.]+")
     private val dnsLabel = Regex("[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?")
+    private val applicationId = Regex("[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*")
+    private val interfaceLists = setOf("address", "dns", "includedapplications", "excludedapplications")
+    private val signatureFields = setOf("i1", "i2", "i3", "i4", "i5")
+    private val optionalEmptyFields = signatureFields + "headerprotectionkey"
     private val headerFields = listOf("h1", "h2", "h3", "h4")
     private val paddingFields = listOf("s1", "s2", "s3", "s4")
     private val timingFields = setOf(
@@ -73,64 +80,81 @@ internal object AwgConfigParser {
                     if (separator < 1) throw ConfigFormatException(line)
                     val field = content.substring(0, separator).trim().lowercase()
                     val value = content.substring(separator + 1).trim()
-                    val valid = if (section === device) validInterface(field, value) else validPeer(field, value)
-                    if (!valid || section.values.containsKey(field)) throw ConfigFormatException(line)
-                    section.values[field] = value
+                    val onInterface = section === device
+                    val valid = (if (onInterface) validInterface(field, value) else validPeer(field, value))
+                        ?: throw ConfigFormatException(line, unsupportedOption = true)
+                    val previous = section.values[field]
+                    val repeatable = if (onInterface) field in interfaceLists else field == "allowedips"
+                    if (!valid || (previous != null && !repeatable)) throw ConfigFormatException(line)
+                    if (previous == null) section.values[field] = StringBuilder(value)
+                    else previous.append(", ").append(value)
                     section.lines[field] = line
                 }
             }
         }
 
         val interfaceSection = device ?: throw ConfigFormatException()
-        validateInterface(interfaceSection)
+        val interfaceFields = interfaceSection.fields()
+        validateInterface(interfaceSection, interfaceFields)
         if (peers.isEmpty()) throw ConfigFormatException()
         val publicKeys = mutableSetOf<String>()
         for (peer in peers) {
-            val publicKey = peer.values["publickey"] ?: throw ConfigFormatException(peer.startLine)
+            val publicKey = peer.values["publickey"]?.toString() ?: throw ConfigFormatException(peer.startLine)
             if (!publicKeys.add(publicKey)) throw ConfigFormatException(peer.lines["publickey"])
         }
         return AwgConfig(
-            ConfigSection(interfaceSection.values.toMap()),
-            peers.map { ConfigSection(it.values.toMap()) },
+            ConfigSection(interfaceFields.filterNot { (field, value) ->
+                field in optionalEmptyFields && value.isEmpty()
+            }),
+            peers.map { ConfigSection(it.fields()) },
         )
     }
 
     private class SectionBuilder(val startLine: Int) {
-        val values = mutableMapOf<String, String>()
+        val values = mutableMapOf<String, StringBuilder>()
         val lines = mutableMapOf<String, Int>()
+
+        fun fields(): Map<String, String> = values.mapValues { (_, value) -> value.toString() }
     }
 
-    private fun validInterface(field: String, value: String): Boolean = when (field) {
-        "privatekey", "headerprotectionkey" -> validKey(value)
+    private fun validInterface(field: String, value: String): Boolean? = when (field) {
+        "privatekey" -> validKey(value)
+        "headerprotectionkey" -> value.isEmpty() || validKey(value)
         "address" -> validList(value, ::validCidr)
         "dns" -> validList(value) { ipVersion(it) != null || validHost(it) }
         "listenport" -> number(value, UINT16_MAX) != null
-        "mtu" -> number(value, UINT16_MAX)?.let { it >= 68 } == true
+        "mtu" -> number(value, UINT16_MAX)?.let { it == 0L || it >= 68 } == true
+        "includedapplications", "excludedapplications" ->
+            validList(value) { it.length <= 255 && applicationId.matches(it) }
         "jc", "jmin", "jmax" -> number(value, UINT32_MAX) != null
         in paddingFields -> number(value, UINT16_MAX) != null
         in headerFields -> range(value) != null
         in timingFields -> range(value, allowOff = true) != null
         "randomtrailers", "disablecookies" -> validBoolean(value)
-        "i1", "i2", "i3", "i4", "i5" -> value.isNotEmpty()
-        else -> false
+        in signatureFields -> true
+        else -> null
     }
 
-    private fun validPeer(field: String, value: String): Boolean = when (field) {
+    private fun validPeer(field: String, value: String): Boolean? = when (field) {
         "publickey", "presharedkey" -> validKey(value)
         "allowedips" -> validList(value, ::validCidr)
         "endpoint" -> validEndpoint(value)
         "persistentkeepalive" -> range(value, allowOff = true) != null
         "advancedsecurity" -> validBoolean(value)
-        else -> false
+        else -> null
     }
 
-    private fun validateInterface(section: SectionBuilder) {
-        val values = section.values
+    private fun validateInterface(section: SectionBuilder, values: Map<String, String>) {
         if ("privatekey" !in values) throw ConfigFormatException(section.startLine)
+        if ("includedapplications" in values && "excludedapplications" in values) {
+            val includedLine = section.lines.getValue("includedapplications")
+            val excludedLine = section.lines.getValue("excludedapplications")
+            throw ConfigFormatException(maxOf(includedLine, excludedLine))
+        }
         val min = values["jmin"]?.toLong() ?: 0
         val max = values["jmax"]?.toLong() ?: 0
         if (min > max) throw ConfigFormatException(section.lines["jmin"])
-        if ("headerprotectionkey" in values && paddingFields.any { (values[it]?.toLong() ?: 0) < 12 }) {
+        if (!values["headerprotectionkey"].isNullOrEmpty() && paddingFields.any { (values[it]?.toLong() ?: 0) < 12 }) {
             throw ConfigFormatException(section.lines["headerprotectionkey"])
         }
         val headers = headerFields.mapIndexed { index, field ->

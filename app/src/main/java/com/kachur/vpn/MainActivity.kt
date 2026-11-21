@@ -379,7 +379,10 @@ class MainActivity : ComponentActivity() {
     private fun renderNotificationAccess() {
         val manager = getSystemService(NotificationManager::class.java) ?: return
         val channelBlocked = manager.getNotificationChannel(VpnNotifications.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
-        notificationAccess.visibility = if (manager.areNotificationsEnabled() && !channelBlocked) View.GONE else View.VISIBLE
+        val enabled = manager.areNotificationsEnabled() && !channelBlocked
+        val becameEnabled = enabled && notificationAccess.visibility == View.VISIBLE
+        notificationAccess.visibility = if (enabled) View.GONE else View.VISIBLE
+        if (becameEnabled) VpnConnection.refreshNotification()
     }
 
     private fun openNotificationAccess() {

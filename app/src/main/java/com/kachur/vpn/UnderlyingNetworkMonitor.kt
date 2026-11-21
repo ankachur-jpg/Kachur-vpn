@@ -37,28 +37,27 @@ internal class UnderlyingNetworkMonitor(context: Context, private val handler: H
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             ) {
-                validated[network] = when {
+                val rank = when {
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> 3
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> 2
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> 1
                     else -> 0
                 }
+                if (validated.put(network, rank) != rank) scheduleDispatch()
             } else {
-                validated.remove(network)
+                if (validated.remove(network) != null) scheduleDispatch()
             }
-            scheduleDispatch()
         }
 
         override fun onLost(network: Network) {
             if (!registered) return
-            validated.remove(network)
-            scheduleDispatch()
+            if (validated.remove(network) != null) scheduleDispatch()
         }
     }
 
     private val best = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            if (!bestRegistered) return
+            if (!bestRegistered || preferred == network) return
             preferred = network
             scheduleDispatch()
         }

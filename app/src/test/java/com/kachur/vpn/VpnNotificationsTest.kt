@@ -37,6 +37,7 @@ class VpnNotificationsTest {
         assertTrue(connected.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
         val bigText = connected.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString()
         assertTrue(bigText.contains("Германия"))
+        assertTrue(bigText.contains("Время подключения"))
         assertTrue(bigText.contains("Входящий трафик"))
         assertTrue(bigText.contains("Исходящий"))
         val action = shadowOf(connected.actions.single().actionIntent).savedIntent

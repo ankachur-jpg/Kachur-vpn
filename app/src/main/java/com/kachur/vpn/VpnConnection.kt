@@ -42,6 +42,8 @@ internal object VpnConnection {
         private set
     var currentError: VpnError? = null
         private set
+    var notificationRevision = 0L
+        private set
     var serviceLaunch = R.string.vpn_service_not_requested
         private set
     var serviceResponse = R.string.vpn_service_no_response_yet
@@ -79,8 +81,15 @@ internal object VpnConnection {
         eventNumber++
         lastEvent = event
         if (error != null) lastError = error
-        observers.toList().forEach { it() }
+        notifyObservers()
     }
+
+    fun refreshNotification() {
+        notificationRevision++
+        notifyObservers()
+    }
+
+    private fun notifyObservers() = observers.toList().forEach { it() }
 
     fun publish(phase: VpnPhase, message: Int, error: VpnError? = null) {
         this.phase = phase

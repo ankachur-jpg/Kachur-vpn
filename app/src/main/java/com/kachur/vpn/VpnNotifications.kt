@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.text.format.DateFormat
 import android.text.format.Formatter
+import java.util.Date
 
 internal enum class VpnNoticeStatus(val label: Int) {
     CONNECTING(R.string.vpn_notice_connecting),
@@ -44,6 +46,9 @@ internal class VpnNotifications(private val context: Context) {
             context.getString(R.string.vpn_notice_traffic,
                 Formatter.formatShortFileSize(context, it.received), Formatter.formatShortFileSize(context, it.sent))
         }
+        val started = notice.connectedAt.takeIf { it > 0L }?.let {
+            context.getString(R.string.vpn_notice_connected_at, DateFormat.getTimeFormat(context).format(Date(it)))
+        }
         val open = PendingIntent.getActivity(
             context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_IMMUTABLE,
@@ -52,7 +57,7 @@ internal class VpnNotifications(private val context: Context) {
             .setSmallIcon(R.drawable.ic_vpn_status)
             .setContentTitle(context.getString(R.string.app_name))
             .setContentText(summary)
-            .setStyle(Notification.BigTextStyle().bigText(listOfNotNull(summary, notice.detail, traffic).joinToString("\n")))
+            .setStyle(Notification.BigTextStyle().bigText(listOfNotNull(summary, notice.detail, started, traffic).joinToString("\n")))
             .setContentIntent(open)
             .setCategory(if (ongoing) Notification.CATEGORY_SERVICE else Notification.CATEGORY_ERROR)
             .setOnlyAlertOnce(true)

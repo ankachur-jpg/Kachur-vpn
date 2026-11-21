@@ -40,6 +40,7 @@ class AwgVpnService : VpnService() {
     @Volatile private var notificationDismissed = false
     private var postedError = false
     private var lastNotice: VpnNotice? = null
+    private var lastNoticeRevision = VpnConnection.notificationRevision
     private var connectedAt = 0L
     private var traffic: VpnTraffic? = null
 
@@ -255,8 +256,10 @@ class AwgVpnService : VpnService() {
             }
             VpnPhase.IDLE -> return
         }
-        if (!foreground || notificationDismissed || lastNotice == notice) return
+        val revision = VpnConnection.notificationRevision
+        if (!foreground || notificationDismissed || (lastNotice == notice && lastNoticeRevision == revision)) return
         lastNotice = notice
+        lastNoticeRevision = revision
         queueNotice(notice, id)
     }
 

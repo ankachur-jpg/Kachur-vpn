@@ -141,9 +141,9 @@ class ProfilesActivity : ComponentActivity() {
     }
 
     private fun addRow(profile: ImportedProfile, working: Boolean) {
-        val id = profile.documentKey
-        val selected = session.catalog.selectedId == id
-        val inUse = VpnConnection.activeProfileId == id
+        val profileId = profile.documentKey
+        val selected = session.catalog.selectedId == profileId
+        val inUse = VpnConnection.activeProfileId == profileId
         val item = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(12), 0, dp(8))
@@ -153,7 +153,7 @@ class ProfilesActivity : ComponentActivity() {
             textSize = 18f
         })
         item.addView(TextView(this).apply {
-            text = listOfNotNull(labels.country(id), getString(R.string.profiles_selected).takeIf { selected },
+            text = listOfNotNull(labels.country(profileId), getString(R.string.profiles_selected).takeIf { selected },
                 getString(R.string.profiles_in_use).takeIf { inUse }).joinToString(" · ")
         })
         val actions = LinearLayout(this)
@@ -163,8 +163,8 @@ class ProfilesActivity : ComponentActivity() {
             isEnabled = !working && !inUse && !VpnConnection.checkingRoutes &&
                 VpnConnection.phase != VpnPhase.STARTING && VpnConnection.phase != VpnPhase.STOPPING
             setOnClickListener {
-                val request = ProfileConnectionRequest(id, VpnConnection.manualStopGeneration)
-                session.edit(applicationContext, request) { it.select(id) }
+                val request = ProfileConnectionRequest(profileId, VpnConnection.manualStopGeneration)
+                session.edit(applicationContext, request) { it.select(profileId) }
             }
         })
         actions.addView(Button(this).apply {

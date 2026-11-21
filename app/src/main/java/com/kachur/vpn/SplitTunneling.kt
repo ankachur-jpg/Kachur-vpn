@@ -6,11 +6,32 @@ import android.graphics.drawable.Drawable
 import androidx.annotation.StringRes
 import java.text.Collator
 
+internal data class VpnRoutingSettings(val apps: Set<String>, val ipRoutes: Set<String>)
+
 internal class SplitTunnelingSettings(context: Context) {
     private val preferences = context.getSharedPreferences("split_tunneling", Context.MODE_PRIVATE)
 
     fun excludedPackages(): Set<String> =
         preferences.getStringSet("excluded_packages", emptySet()).orEmpty().toSet()
+
+    fun ipRoutes(): Set<String> =
+        preferences.getStringSet("direct_ip_routes", emptySet()).orEmpty().toSet()
+
+    fun snapshot() = VpnRoutingSettings(excludedPackages(), ipRoutes())
+
+    // Only canonical prefixes reach this store. Perform edits on the main thread.
+    fun addIpRoutes(routes: Set<String>): Int {
+        val current = ipRoutes()
+        val updated = current + routes
+        if (updated.size > IpRouteImport.MAX_ENTRIES) throw IpImportException(IpImportError.LIMIT)
+        if (updated.size != current.size) preferences.edit().putStringSet("direct_ip_routes", updated).apply()
+        return updated.size - current.size
+    }
+
+    fun removeIpRoute(route: String) {
+        val current = ipRoutes()
+        if (route in current) preferences.edit().putStringSet("direct_ip_routes", current - route).apply()
+    }
 
     fun setExcluded(packageName: String, excluded: Boolean) {
         val selection = excludedPackages()

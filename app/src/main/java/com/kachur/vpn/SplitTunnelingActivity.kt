@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.app.Activity
+import android.content.Intent
 import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
@@ -76,6 +77,11 @@ class SplitTunnelingActivity : Activity() {
             setText(R.string.split_description)
             setTextColor(Color.LTGRAY)
             setPadding(0, dp(6), 0, dp(6))
+        })
+        root.addView(Button(this).apply {
+            id = R.id.ip_open_button
+            setText(R.string.ip_title)
+            setOnClickListener { startActivity(Intent(this@SplitTunnelingActivity, IpRoutesActivity::class.java)) }
         })
         reconnect = Button(this).apply {
             id = R.id.split_reconnect_button
@@ -172,7 +178,8 @@ class SplitTunnelingActivity : Activity() {
     }
 
     private fun renderReconnect() {
-        reconnect.visibility = if (VpnConnection.routingNeedsReconnect(selection)) View.VISIBLE else View.GONE
+        reconnect.isEnabled = !VpnConnection.checkingRoutes
+        reconnect.visibility = if (VpnConnection.routingNeedsReconnect(applicationContext)) View.VISIBLE else View.GONE
     }
 
     private inner class AppList : BaseAdapter() {

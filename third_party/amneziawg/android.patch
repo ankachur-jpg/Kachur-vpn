@@ -8,17 +8,34 @@
  import android.os.Build;
  import android.os.ParcelFileDescriptor;
  import android.system.OsConstants;
-@@ -42,7 +43,9 @@
+@@ -23,6 +24,7 @@
+ import org.amnezia.awg.crypto.KeyFormatException;
+ import org.amnezia.awg.util.NonNullForAll;
+ 
++import java.net.Inet4Address;
+ import java.net.InetAddress;
+ import java.util.Collections;
+ import java.util.Set;
+@@ -31,6 +33,7 @@
+ import java.util.concurrent.LinkedBlockingQueue;
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.TimeoutException;
++import java.util.function.Consumer;
+ 
+ import androidx.annotation.Nullable;
+ import androidx.collection.ArraySet;
+@@ -42,7 +45,10 @@
   * AmneziaWG tunnels.
   */
  @NonNullForAll
 +// Modified by Kachur VPN: explicit service ownership and redacted diagnostics.
  public final class GoBackend implements Backend {
 +    @Nullable private android.net.VpnService managedService;
++    @Nullable private Consumer<android.net.VpnService.Builder> configureRoutes;
      private static final int DNS_RESOLUTION_RETRIES = 10;
      private static final String TAG = "AmneziaWG/GoBackend";
      @Nullable private static AlwaysOnCallback alwaysOnCallback;
-@@ -51,7 +54,6 @@
+@@ -51,7 +57,6 @@
      @Nullable private Config currentConfig;
      @Nullable private Tunnel currentTunnel;
      private int currentTunnelHandle = -1;
@@ -26,7 +43,7 @@
      @Nullable private StatusCallback statusCallback;
  
      /**
-@@ -62,6 +64,11 @@
+@@ -62,6 +67,17 @@
      public GoBackend(final Context context) {
          SharedLibraryLoader.loadSharedLibrary(context, "wg-go");
          this.context = context;
@@ -35,10 +52,16 @@
 +    public GoBackend(final Context context, final android.net.VpnService service) {
 +        this(context);
 +        managedService = service;
++    }
++
++    public GoBackend(final Context context, final android.net.VpnService service,
++                     final Consumer<android.net.VpnService.Builder> configureRoutes) {
++        this(context, service);
++        this.configureRoutes = configureRoutes;
      }
  
      /**
-@@ -188,19 +195,17 @@
+@@ -188,19 +204,17 @@
              return -2;
          }
  
@@ -61,7 +84,7 @@
      }
  
      /**
-@@ -210,67 +215,6 @@
+@@ -210,67 +224,6 @@
       */
      public void setStatusCallback(@Nullable final StatusCallback callback) {
          this.statusCallback = callback;
@@ -129,7 +152,7 @@
      }
  
      /**
-@@ -330,20 +274,9 @@
+@@ -330,20 +283,9 @@
              if (VpnService.prepare(context) != null)
                  throw new BackendException(Reason.VPN_NOT_AUTHORIZED);
  
@@ -153,7 +176,7 @@
  
              if (currentTunnelHandle != -1) {
                  Log.w(TAG, "Tunnel already up");
-@@ -359,11 +292,11 @@
+@@ -359,11 +301,11 @@
                          continue;
                      if (ep.getResolved().orElse(null) == null) {
                          if (i < DNS_RESOLUTION_RETRIES - 1) {
@@ -167,7 +190,7 @@
                      }
                  }
                  break;
-@@ -373,11 +306,16 @@
+@@ -373,11 +315,16 @@
              final String goConfig = config.toAwgUserspaceString();
  
              // Create the vpn tunnel with android API
@@ -187,7 +210,28 @@
  
              for (final String includedApplication : config.getInterface().getIncludedApplications())
                  builder.addAllowedApplication(includedApplication);
-@@ -423,27 +361,35 @@
+@@ -396,9 +343,17 @@
+                 for (final InetNetwork addr : peer.getAllowedIps()) {
+                     if (addr.getMask() == 0)
+                         sawDefaultRoute = true;
+-                    builder.addRoute(addr.getAddress(), addr.getMask());
+-                }
+-            }
++                    if (configureRoutes == null) {
++                        builder.addRoute(addr.getAddress(), addr.getMask());
++                    } else {
++                        // Preserve the original route's implicit address family permission.
++                        builder.allowFamily(addr.getAddress() instanceof Inet4Address
++                                ? OsConstants.AF_INET : OsConstants.AF_INET6);
++                    }
++                }
++            }
++            if (configureRoutes != null)
++                configureRoutes.accept(builder);
+ 
+             // "Kill-switch" semantics
+             if (!(sawDefaultRoute && config.getPeers().size() == 1)) {
+@@ -423,27 +378,35 @@
              if (currentTunnelHandle < 0)
                  throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
  

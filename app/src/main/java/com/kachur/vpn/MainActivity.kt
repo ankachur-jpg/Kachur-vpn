@@ -31,7 +31,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
     private lateinit var reconnectButton: Button
-    private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
     private val vpnObserver: () -> Unit = ::renderConnection
@@ -298,7 +297,8 @@ class MainActivity : ComponentActivity() {
         val blocked = connectionButtonBlockReason()
         importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
         connectButton.isEnabled = blocked == null
-        reconnectButton.visibility = if (VpnConnection.routingNeedsReconnect(splitSettings.excludedPackages())) {
+        reconnectButton.isEnabled = !VpnConnection.checkingRoutes
+        reconnectButton.visibility = if (VpnConnection.routingNeedsReconnect(applicationContext)) {
             View.VISIBLE
         } else {
             View.GONE

@@ -19,27 +19,39 @@ import androidx.lifecycle.ViewModelProvider
 class MainActivity : ComponentActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
+    private lateinit var diagnostics: TextView
     private lateinit var feedback: TextView
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_CANCELED) return@registerForActivityResult
-
-        val data = result.data
-        val uri = data?.data ?: data?.clipData?.takeIf { it.itemCount == 1 }?.getItemAt(0)?.uri
-        when {
-            result.resultCode != Activity.RESULT_OK || uri == null ->
-                session.showMessage(R.string.no_document_returned)
-            uri.scheme != ContentResolver.SCHEME_CONTENT ->
-                session.showMessage(R.string.unsupported_document_uri)
-            else -> session.load(applicationContext.contentResolver, uri, getString(R.string.unnamed_profile))
+        session.record(R.string.import_result_received)
+        when (result.resultCode) {
+            Activity.RESULT_CANCELED -> session.finish(R.string.import_cancelled)
+            Activity.RESULT_OK -> {
+                val data = result.data
+                val uri = data?.data ?: data?.clipData?.takeIf { it.itemCount == 1 }?.getItemAt(0)?.uri
+                when {
+                    uri == null -> session.finish(R.string.no_document_returned)
+                    uri.scheme != ContentResolver.SCHEME_CONTENT ->
+                        session.finish(R.string.unsupported_document_uri)
+                    else -> session.load(applicationContext.contentResolver, uri, getString(R.string.unnamed_profile))
+                }
+            }
+            else -> session.finish(R.string.unexpected_picker_result)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         session = ViewModelProvider(this)[ImportSession::class.java]
+
+        if (!session.busy && savedInstanceState != null) {
+            when {
+                savedInstanceState.getBoolean(IMPORT_IN_PROGRESS) -> session.finish(R.string.import_interrupted)
+                savedInstanceState.getBoolean(PICKER_IN_PROGRESS) -> session.startPicker()
+            }
+        }
 
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -52,6 +64,8 @@ class MainActivity : ComponentActivity() {
         profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
         layout.addView(profileName)
         layout.addView(label(getString(R.string.vpn_disconnected), 18f, Color.LTGRAY))
+        diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
+        layout.addView(diagnostics)
         feedback = label("", 16f, Color.LTGRAY).apply {
             id = R.id.import_feedback
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -87,6 +101,21 @@ class MainActivity : ComponentActivity() {
         render()
     }
 
+    override fun onPostResume() {
+        super.onPostResume()
+        if (session.picking) {
+            // Registry results are delivered by this point when Android returns from the picker.
+            session.finish(R.string.picker_no_callback)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
+        outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
+        outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
+    }
+
     override fun onDestroy() {
         session.onChange = null
         super.onDestroy()
@@ -101,6 +130,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectConfig() {
+        if (session.busy) return
+        session.startPicker()
         val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             // Providers use different MIME types for .conf. Validate the contents after selection.
@@ -111,14 +142,16 @@ class MainActivity : ComponentActivity() {
         try {
             openConfig.launch(picker)
         } catch (_: ActivityNotFoundException) {
-            session.showMessage(R.string.picker_unavailable)
+            session.finish(R.string.picker_unavailable)
         } catch (_: SecurityException) {
-            session.showMessage(R.string.picker_unavailable)
+            session.finish(R.string.picker_unavailable)
         }
     }
 
     private fun render() {
         profileName.text = session.profile?.name ?: getString(R.string.no_profile)
+        diagnostics.text = session.stages.joinToString("\n") { getString(it) }
+        diagnostics.visibility = if (session.stages.isEmpty()) View.GONE else View.VISIBLE
         val message = session.feedback
         val errorLine = session.errorLine
         feedback.text = when {
@@ -127,7 +160,12 @@ class MainActivity : ComponentActivity() {
             else -> getString(message)
         }
         feedback.visibility = if (feedback.text.isEmpty()) View.GONE else View.VISIBLE
-        importButton.isEnabled = !session.loading
-        connectButton.isEnabled = session.profile != null && !session.loading
+        importButton.isEnabled = !session.busy
+        connectButton.isEnabled = session.profile != null && !session.busy
+    }
+
+    private companion object {
+        const val PICKER_IN_PROGRESS = "config_picker_in_progress"
+        const val IMPORT_IN_PROGRESS = "config_import_in_progress"
     }
 }

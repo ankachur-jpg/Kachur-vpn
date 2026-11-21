@@ -6,7 +6,6 @@
     <string name="connect_vpn">Подключить VPN</string>
     <string name="engine_unavailable">Для подключения нужен совместимый движок AmneziaWG 2.0.</string>
     <string name="picker_unavailable">Системный выбор файлов недоступен.</string>
-    <string name="importing_profile">Импорт профиля…</string>
     <string name="profile_imported">Профиль импортирован.</string>
     <string name="unnamed_profile">Импортированный профиль</string>
     <string name="no_document_returned">Файловый менеджер не передал файл. Попробуйте выбрать его ещё раз.</string>
@@ -15,5 +14,25 @@
     <string name="unsupported_config_option">Неподдерживаемый параметр конфигурации в строке %1$d.</string>
     <string name="invalid_config">Недопустимая конфигурация VPN.</string>
     <string name="invalid_config_line">Недопустимая конфигурация VPN, строка %1$d.</string>
-    <string name="cannot_read_config">Не удалось открыть или прочитать выбранный файл. Проверьте, что он доступен, и выберите его снова.</string>
+    <string name="cannot_read_config">Не удалось прочитать выбранный файл. Проверьте, что он доступен, и выберите его снова.</string>
+    <string name="import_picker_opening">Открытие системного выбора файла</string>
+    <string name="import_result_received">Получен ответ от файлового менеджера</string>
+    <string name="import_document_opening">Открытие выбранного документа</string>
+    <string name="import_document_reading">Чтение файла в кодировке UTF-8</string>
+    <string name="import_config_parsing">Проверка конфигурации AmneziaWG</string>
+    <string name="import_profile_naming">Получение имени профиля</string>
+    <string name="import_profile_default_name">Имя файла недоступно. Использовано стандартное имя профиля.</string>
+    <string name="import_profile_displayed">Профиль добавлен на главный экран</string>
+    <string name="import_cancelled">Выбор файла отменён. Если вы выбрали файл, попробуйте другой файловый менеджер.</string>
+    <string name="picker_no_callback">Файловый менеджер закрылся без ответа. Попробуйте выбрать файл снова.</string>
+    <string name="unexpected_picker_result">Файловый менеджер вернул неожиданный результат. Выберите файл снова.</string>
+    <string name="import_interrupted">Android прервал импорт. Выберите файл снова.</string>
+    <string name="cannot_open_config">Не удалось открыть выбранный файл. Проверьте, доступен ли он, и выберите его снова.</string>
+    <string name="config_access_denied">Android запретил доступ к файлу. Выберите его снова через системный файловый менеджер.</string>
+    <string name="config_parse_failed">Не удалось проверить конфигурацию. Попробуйте заново экспортировать файл .conf.</string>
+    <string name="config_too_large">Файл слишком большой для конфигурации VPN. Выберите отдельный профиль .conf.</string>
+    <string name="config_missing_interface">В конфигурации отсутствует раздел [Interface].</string>
+    <string name="config_missing_peer">В конфигурации отсутствует раздел [Peer].</string>
+    <string name="config_missing_private_key">В разделе [Interface] отсутствует PrivateKey. Строка %1$d.</string>
+    <string name="config_missing_public_key">В разделе [Peer] отсутствует PublicKey. Строка %1$d.</string>
 </resources>

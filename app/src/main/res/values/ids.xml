@@ -3,6 +3,9 @@
     <item type="id" name="profiles_open" />
     <item type="id" name="profiles_import" />
     <item type="id" name="profiles_list" />
+    <item type="id" name="profiles_status" />
+    <item type="id" name="profiles_row_connect" />
+    <item type="id" name="profiles_row_actions" />
     <item type="id" name="import_feedback" />
     <item type="id" name="import_profile_button" />
     <item type="id" name="import_diagnostics" />

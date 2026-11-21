@@ -66,6 +66,7 @@ internal class ProfileCatalog(val entries: List<ImportedProfile>, val selectedId
 
     companion object {
         const val MAX_PROFILES = 64
+        const val MAX_BYTES = 2 * 1024 * 1024
         val EMPTY = ProfileCatalog(emptyList(), null)
         fun legacy(profile: ImportedProfile?) = profile?.let { ProfileCatalog(listOf(it), it.documentKey) } ?: EMPTY
     }
@@ -77,6 +78,7 @@ internal object ProfileCatalogJson {
         .put("selected", catalog.selectedId ?: JSONObject.NULL)
 
     fun decode(json: JSONObject): ProfileCatalog {
+        if (json.toString().toByteArray(Charsets.UTF_8).size > ProfileCatalog.MAX_BYTES) throw ProfileLimitException()
         val array = json.getJSONArray("profiles")
         if (array.length() > ProfileCatalog.MAX_PROFILES) throw ProfileLimitException()
         val selected = when (val id = json.get("selected")) {
@@ -131,7 +133,7 @@ internal class LocalProfiles(context: Context, private val key: () -> SecretKey)
         if (catalog.entries.isEmpty()) return null
         val content = ProfileCatalogJson.encode(catalog).toString().toByteArray(Charsets.UTF_8)
         return try {
-            if (content.size > MAX_CATALOG_SIZE) throw ProfileLimitException()
+            if (content.size > ProfileCatalog.MAX_BYTES) throw ProfileLimitException()
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(Cipher.ENCRYPT_MODE, key())
             check(cipher.iv.size == NONCE_SIZE)
@@ -186,8 +188,7 @@ internal class LocalProfiles(context: Context, private val key: () -> SecretKey)
         const val LEGACY_PROFILE = "selected_profile_ciphertext"
         const val REVISION = "selected_profile_revision"
         const val NONCE_SIZE = 12
-        const val MAX_CATALOG_SIZE = 2 * 1024 * 1024
-        const val MAX_ENCODED_SIZE = (MAX_CATALOG_SIZE + NONCE_SIZE + 18) / 3 * 4
+        const val MAX_ENCODED_SIZE = (ProfileCatalog.MAX_BYTES + NONCE_SIZE + 18) / 3 * 4
         val LEGACY_AAD = "Kachur VPN selected profile v1".toByteArray(Charsets.UTF_8)
         val CATALOG_AAD = "Kachur VPN profile catalog v2".toByteArray(Charsets.UTF_8)
     }

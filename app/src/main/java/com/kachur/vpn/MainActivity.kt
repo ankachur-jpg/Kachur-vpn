@@ -405,7 +405,10 @@ class MainActivity : ComponentActivity() {
             permissionMessage = null
         }
         val phase = VpnConnection.phase
-        val tunnelName = VpnConnection.activeProfileName?.takeIf { VpnConnection.activeProfileId != session.profile?.documentKey }
+        val runningId = VpnConnection.activeProfileId
+        val tunnelName = if (runningId != null && runningId != session.profile?.documentKey) {
+            session.catalog.entries.firstOrNull { it.documentKey == runningId }?.name ?: VpnConnection.activeProfileName
+        } else null
         activeProfile.visibility = if (tunnelName == null) View.GONE else View.VISIBLE
         if (tunnelName != null) activeProfile.text = getString(R.string.profiles_active_tunnel, tunnelName)
         autoConnect.isChecked = launchSettings.enabled

@@ -61,6 +61,7 @@ class ProfilesActivity : ComponentActivity() {
         }
         content.addView(importButton)
         status = TextView(this).apply {
+            id = R.id.profiles_status
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             setPadding(0, dp(4), 0, dp(8))
         }
@@ -157,6 +158,7 @@ class ProfilesActivity : ComponentActivity() {
         })
         val actions = LinearLayout(this)
         actions.addView(Button(this).apply {
+            id = R.id.profiles_row_connect
             setText(if (VpnConnection.phase == VpnPhase.IDLE) R.string.profiles_connect else R.string.profiles_switch)
             isEnabled = !working && !inUse && !VpnConnection.checkingRoutes &&
                 VpnConnection.phase != VpnPhase.STARTING && VpnConnection.phase != VpnPhase.STOPPING
@@ -166,6 +168,7 @@ class ProfilesActivity : ComponentActivity() {
             }
         })
         actions.addView(Button(this).apply {
+            id = R.id.profiles_row_actions
             setText(R.string.profiles_actions)
             isEnabled = !working
             setOnClickListener { showActions(it, profile, selected) }

@@ -142,12 +142,15 @@ internal class ImportSession : ViewModel() {
             var line: Int? = null
             var accessError = R.string.cannot_open_config
             try {
+                var totalChars = 0
                 val profiles = uris.map { uri ->
                     accessError = R.string.cannot_open_config
                     val stream = resolver.openInputStream(uri) ?: throw IOException()
                     accessError = R.string.cannot_read_config
                     main.post { record(R.string.import_document_reading) }
                     val source = stream.use(AwgConfigParser::read)
+                    totalChars += source.length
+                    if (totalChars > ProfileCatalog.MAX_BYTES) throw ProfileLimitException()
                     main.post { record(R.string.import_config_parsing) }
                     accessError = R.string.config_parse_failed
                     val config = AwgConfigParser.parse(source)

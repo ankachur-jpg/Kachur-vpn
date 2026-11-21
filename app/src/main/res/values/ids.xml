@@ -12,6 +12,8 @@
     <item type="id" name="backup_open" />
     <item type="id" name="backup_preview" />
     <item type="id" name="backup_confirm" />
+    <item type="id" name="diag_open_screen" />
+    <item type="id" name="diag_run" />
     <item type="id" name="connect_vpn_button" />
     <item type="id" name="connection_diagnostics" />
     <item type="id" name="reset_vpn_button" />

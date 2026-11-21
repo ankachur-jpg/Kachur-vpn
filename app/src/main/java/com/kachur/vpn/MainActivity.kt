@@ -212,6 +212,11 @@ class MainActivity : ComponentActivity() {
             setText(R.string.backup_title)
             setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
         })
+        layout.addView(Button(this).apply {
+            id = R.id.diag_open_screen
+            setText(R.string.diag_title)
+            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
+        })
         reconnectButton = Button(this).apply {
             id = R.id.main_split_reconnect_button
             setText(R.string.split_apply_reconnect)

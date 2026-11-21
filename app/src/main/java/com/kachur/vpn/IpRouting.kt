@@ -7,6 +7,8 @@ import java.net.InetAddress
 internal data class IpRoutePrefix private constructor(val address: InetAddress, val length: Int) {
     override fun toString(): String = "${address.hostAddress}/$length"
 
+    fun contains(target: InetAddress): Boolean = address.address.size == target.address.size && from(target.address, length) == this
+
     companion object {
         fun parse(input: String): IpRoutePrefix? {
             val parts = input.trim().split('/', limit = 2)

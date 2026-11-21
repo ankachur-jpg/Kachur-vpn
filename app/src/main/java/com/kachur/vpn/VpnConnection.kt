@@ -2,6 +2,7 @@ package com.kachur.vpn
 
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
 import org.amnezia.awg.config.BadConfigException
@@ -69,6 +70,7 @@ internal object VpnConnection {
         var completionMessage = R.string.vpn_disconnected
         var routingCheck: RoutingCheck? = null
         var restart: Restart? = null
+        var diagnosticService: VpnService? = null
     }
 
     fun observe(observer: () -> Unit) {
@@ -185,6 +187,16 @@ internal object VpnConnection {
     }
 
     fun ownsAttempt(id: Long) = active?.id == id
+
+    fun attachDiagnosticService(id: Long, service: VpnService) {
+        active?.takeIf { it.id == id }?.diagnosticService = service
+    }
+
+    fun diagnosticSession(): DiagnosticSession? {
+        val attempt = active ?: return null
+        return DiagnosticSession(attempt.options ?: return null, attempt.diagnosticService ?: return null,
+            phase == VpnPhase.HANDSHAKE)
+    }
 
     fun recovering(id: Long, message: Int) {
         val attempt = active?.takeIf { it.id == id && it.cancelService != null } ?: return

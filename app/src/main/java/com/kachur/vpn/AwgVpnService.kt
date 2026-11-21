@@ -89,6 +89,7 @@ class AwgVpnService : VpnService() {
         }
 
         attempt = id
+        VpnConnection.attachDiagnosticService(id, this)
         options = claimed
         country = claimed.country
         VpnConnection.observe(connectionObserver)

@@ -416,6 +416,47 @@ class ConfigImportActivityTest {
         }
     }
 
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun displaysSafeParserFailureAfterTheServiceStops() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val invalidValue = "4294967295"
+            registerDocument(activity, validConfig().replace("Jc = 4", "Jc = $invalidValue"))
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            VpnConsentShadow.granted = true
+            try {
+                val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+                assertTrue(connect.performClick())
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val serviceIntent = shadowOf(activity).nextStartedService
+                val service = Robolectric.buildService(AwgVpnService::class.java, serviceIntent).create()
+                val safeError = activity.getString(
+                    R.string.vpn_config_error_parameter,
+                    activity.getString(R.string.vpn_config_error_invalid_number),
+                    "Jc",
+                )
+                try {
+                    service.startCommand(0, 1)
+                    awaitViewText(activity, R.id.connection_diagnostics, safeError)
+                } finally {
+                    service.destroy()
+                }
+
+                awaitDiagnostic(activity, R.string.vpn_service_closed)
+                assertEquals(activity.getString(R.string.vpn_backend_invalid_profile), text(activity, R.id.connection_status))
+                val diagnostics = text(activity, R.id.connection_diagnostics)
+                assertTrue(diagnostics.contains(safeError))
+                assertFalse(diagnostics.contains(invalidValue))
+                assertTrue(connect.isEnabled)
+            } finally {
+                VpnConsentShadow.granted = false
+                VpnConnection.reset()
+            }
+        }
+    }
+
     private fun requestVpnPermission(activity: MainActivity): ShadowActivity.IntentForResult {
         assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).performClick())
         awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))

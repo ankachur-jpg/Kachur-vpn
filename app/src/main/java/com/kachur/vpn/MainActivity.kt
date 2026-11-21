@@ -85,7 +85,7 @@ class MainActivity : ComponentActivity() {
         } else if (savedInstanceState?.getBoolean(PERMISSION_PENDING) == true) {
             // An instance saved by an older build has no per-request registration to restore.
             permissionMessage = R.string.vpn_permission_no_result
-            VpnConnection.record(R.string.vpn_permission_no_result, error = true)
+            VpnConnection.record(R.string.vpn_permission_no_result, VpnError(R.string.vpn_permission_no_result))
         }
 
         if (!session.busy && savedInstanceState != null) {
@@ -299,7 +299,7 @@ class MainActivity : ComponentActivity() {
             getString(blocked ?: R.string.vpn_button_available),
             getString(VpnConnection.serviceLaunch),
             getString(VpnConnection.serviceResponse),
-            getString(VpnConnection.lastError ?: R.string.vpn_no_error),
+            VpnConnection.lastError?.display(this) ?: getString(R.string.vpn_no_error),
         )
     }
 
@@ -433,7 +433,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showPermissionMessage(message: Int, error: Boolean = false) {
         permissionMessage = message
-        VpnConnection.record(message, error)
+        VpnConnection.record(message, if (error) VpnError(message) else null)
         renderConnection()
     }
 

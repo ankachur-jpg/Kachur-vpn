@@ -104,4 +104,13 @@
     <string name="vpn_engine_activation_error">GoBackend не запустил туннель или не смог защитить его сокеты.</string>
     <string name="vpn_tunnel_lost">GoBackend больше не видит туннель.</string>
     <string name="vpn_handshake_read_error">Не удалось прочитать состояние handshake из GoBackend.</string>
+    <string name="vpn_config_error_parameter">%1$s · %2$s</string>
+    <string name="vpn_config_error_invalid_key">Неверный формат ключа</string>
+    <string name="vpn_config_error_invalid_number">Неверный формат или размер числа</string>
+    <string name="vpn_config_error_invalid_value">Недопустимое значение параметра</string>
+    <string name="vpn_config_error_missing_parameter">Отсутствует обязательный параметр</string>
+    <string name="vpn_config_error_missing_section">Отсутствует обязательный раздел</string>
+    <string name="vpn_config_error_syntax">Ошибка синтаксиса конфигурации</string>
+    <string name="vpn_config_error_unknown_parameter">Параметр не поддерживается движком AWG 2.0</string>
+    <string name="vpn_config_error_unknown_section">Раздел не поддерживается движком AWG 2.0</string>
 </resources>

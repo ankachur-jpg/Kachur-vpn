@@ -27,7 +27,7 @@ internal object VpnConnection {
         private set
     var resetGeneration = 0L
         private set
-    var lastError: Int? = null
+    var lastError: VpnError? = null
         private set
     var serviceLaunch = R.string.vpn_service_not_requested
         private set
@@ -56,14 +56,14 @@ internal object VpnConnection {
         observers.remove(observer)
     }
 
-    fun record(event: Int, error: Boolean = false) {
+    fun record(event: Int, error: VpnError? = null) {
         eventNumber++
         lastEvent = event
-        if (error) lastError = event
+        if (error != null) lastError = error
         observers.toList().forEach { it() }
     }
 
-    fun publish(phase: VpnPhase, message: Int, error: Boolean = false) {
+    fun publish(phase: VpnPhase, message: Int, error: VpnError? = null) {
         this.phase = phase
         this.message = message
         record(message, error)
@@ -90,7 +90,7 @@ internal object VpnConnection {
                 serviceResponse == R.string.vpn_service_started -> R.string.vpn_foreground_timeout
                 else -> R.string.vpn_setup_timeout
             }
-            stopAttempt(attempt, error, error = true)
+            stopAttempt(attempt, error, VpnError(error))
         }
         attempt.request = systemCalls.submit {
             val accepted = try {
@@ -107,7 +107,7 @@ internal object VpnConnection {
                     record(serviceLaunch)
                 } else {
                     if (attempt.cancelService == null) serviceResponse = R.string.vpn_service_no_response_yet
-                    stopAttempt(attempt, R.string.vpn_service_rejected, error = true)
+                    stopAttempt(attempt, R.string.vpn_service_rejected, error = VpnError(R.string.vpn_service_rejected))
                 }
             }
         }
@@ -147,25 +147,25 @@ internal object VpnConnection {
 
     fun handshakeReadFailed(id: Long) {
         if (active?.id == id && (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE)) {
-            record(R.string.vpn_handshake_read_error, error = true)
+            record(R.string.vpn_handshake_read_error, error = VpnError(R.string.vpn_handshake_read_error))
         }
     }
 
-    fun serviceFailed(id: Long, message: Int) {
+    fun serviceFailed(id: Long, message: Int, error: VpnError = VpnError(message)) {
         val attempt = active?.takeIf { it.id == id && phase != VpnPhase.STOPPING } ?: return
-        stopAttempt(attempt, message, error = true)
+        stopAttempt(attempt, message, error)
     }
 
     fun serviceStopRejected(id: Long) {
         val attempt = active?.takeIf { it.id == id } ?: return
         attempt.completionMessage = R.string.vpn_stop_error
-        record(R.string.vpn_stop_error, error = true)
+        record(R.string.vpn_stop_error, error = VpnError(R.string.vpn_stop_error))
     }
 
     fun serviceClosed(id: Long, cleanupFailed: Boolean) {
         val attempt = active?.takeIf { it.id == id }
         if (attempt == null) {
-            if (cleanupFailed) record(R.string.vpn_stop_error, error = true)
+            if (cleanupFailed) record(R.string.vpn_stop_error, error = VpnError(R.string.vpn_stop_error))
             return
         }
         serviceResponse = R.string.vpn_service_closed
@@ -174,7 +174,7 @@ internal object VpnConnection {
             phase == VpnPhase.STARTING -> R.string.vpn_service_ended_during_start
             else -> null
         }
-        finish(attempt, error ?: attempt.completionMessage, error = error != null)
+        finish(attempt, error ?: attempt.completionMessage, error?.let { VpnError(it) })
     }
 
     fun stop() {
@@ -199,13 +199,13 @@ internal object VpnConnection {
         }
     }
 
-    private fun stopAttempt(attempt: Attempt, message: Int, error: Boolean = false) {
+    private fun stopAttempt(attempt: Attempt, message: Int, error: VpnError? = null) {
         attempt.profile = null
         attempt.request?.cancel(true)
         attempt.request = null
         val cancel = attempt.cancelService
         if (cancel == null) {
-            if (!error) {
+            if (error == null) {
                 serviceLaunch = R.string.vpn_service_request_cancelled
                 serviceResponse = R.string.vpn_service_no_reply
             }
@@ -215,19 +215,19 @@ internal object VpnConnection {
 
         attempt.completionMessage = message
         val status = when {
-            error -> message
+            error != null -> message
             message == R.string.vpn_reset_done -> R.string.vpn_reset_stopping
             else -> R.string.vpn_stopping
         }
         publish(VpnPhase.STOPPING, status, error)
         setDeadline(attempt, STOP_TIMEOUT_MS) {
             serviceResponse = R.string.vpn_service_no_stop_reply
-            finish(attempt, R.string.vpn_stop_timeout, error = true)
+            finish(attempt, R.string.vpn_stop_timeout, error = VpnError(R.string.vpn_stop_timeout))
         }
         cancel()
     }
 
-    private fun finish(attempt: Attempt, message: Int, error: Boolean = false) {
+    private fun finish(attempt: Attempt, message: Int, error: VpnError? = null) {
         clearDeadline(attempt)
         attempt.profile = null
         attempt.cancelService = null

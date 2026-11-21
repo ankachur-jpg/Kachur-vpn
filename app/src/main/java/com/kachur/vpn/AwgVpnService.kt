@@ -97,8 +97,8 @@ class AwgVpnService : VpnService() {
             if (!closing) {
                 polling = backendWorker.scheduleWithFixedDelay({ pollHandshake(id, engine) }, 1, 2, TimeUnit.SECONDS)
             }
-        } catch (_: BadConfigException) {
-            fail(id, R.string.vpn_backend_invalid_profile)
+        } catch (error: BadConfigException) {
+            fail(id, R.string.vpn_backend_invalid_profile, error.toSafeVpnError())
         } catch (error: BackendException) {
             fail(id, when (error.reason) {
                 BackendException.Reason.DNS_RESOLUTION_FAILURE -> R.string.vpn_dns_error
@@ -139,9 +139,9 @@ class AwgVpnService : VpnService() {
         }
     }
 
-    private fun fail(id: Long, message: Int) {
+    private fun fail(id: Long, message: Int, error: VpnError = VpnError(message)) {
         main.post {
-            if (!closing) VpnConnection.serviceFailed(id, message)
+            if (!closing) VpnConnection.serviceFailed(id, message, error)
         }
     }
 

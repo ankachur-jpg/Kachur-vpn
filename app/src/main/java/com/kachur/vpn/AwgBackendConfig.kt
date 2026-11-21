@@ -1,13 +1,102 @@
 package com.kachur.vpn
 
+import android.content.Context
+import androidx.annotation.StringRes
+import org.amnezia.awg.config.BadConfigException
+import org.amnezia.awg.config.BadConfigException.Location
+import org.amnezia.awg.config.BadConfigException.Reason
+import org.amnezia.awg.config.BadConfigException.Section
 import org.amnezia.awg.config.Config
 
-// Feed the official parser every normalized field. It rejects settings newer than this engine.
+// Keep every option. Normalize spellings with the same meaning in the pinned engine.
 internal fun AwgConfig.toBackendConfig(): Config = buildString {
     appendLine("[Interface]")
-    interfaceSection.appendFields(this)
+    interfaceSection.appendFields(this) { name, value ->
+        // Go's header parser requires compact ranges even though Config.parse accepts spaces.
+        if (name in AwgConfigParser.headerFields) value.split('-', limit = 2).joinToString("-") { it.trim() }
+        else value
+    }
     for (peer in peers) {
         appendLine("[Peer]")
-        peer.appendFields(this)
+        peer.appendFields(this) { name, value ->
+            if (name == "persistentkeepalive" && AwgConfigParser.isOff(value)) "0" else value
+        }
     }
 }.reader().buffered().use(Config::parse)
+
+internal data class VpnError(@StringRes val category: Int, val parameter: AwgParameter? = null) {
+    fun display(context: Context): String {
+        val message = context.getString(category)
+        return parameter?.let { context.getString(R.string.vpn_config_error_parameter, message, it.label) } ?: message
+    }
+}
+
+// The parser's Location labels aren't always .conf names. Only these fixed labels reach the UI.
+internal enum class AwgParameter(
+    val label: String,
+    val location: Location? = null,
+    val unsupportedSection: Section? = null,
+) {
+    ADDRESS("Address", Location.ADDRESS),
+    ALLOWED_IPS("AllowedIPs", Location.ALLOWED_IPS),
+    DNS("DNS", Location.DNS),
+    ENDPOINT("Endpoint", Location.ENDPOINT),
+    EXCLUDED_APPLICATIONS("ExcludedApplications", Location.EXCLUDED_APPLICATIONS),
+    INCLUDED_APPLICATIONS("IncludedApplications", Location.INCLUDED_APPLICATIONS),
+    LISTEN_PORT("ListenPort", Location.LISTEN_PORT),
+    MTU("MTU", Location.MTU),
+    PERSISTENT_KEEPALIVE("PersistentKeepalive", Location.PERSISTENT_KEEPALIVE),
+    PRE_SHARED_KEY("PresharedKey", Location.PRE_SHARED_KEY),
+    PRIVATE_KEY("PrivateKey", Location.PRIVATE_KEY),
+    PUBLIC_KEY("PublicKey", Location.PUBLIC_KEY),
+    JC("Jc", Location.JUNK_PACKET_COUNT),
+    JMIN("Jmin", Location.JUNK_PACKET_MIN_SIZE),
+    JMAX("Jmax", Location.JUNK_PACKET_MAX_SIZE),
+    S1("S1", Location.INIT_PACKET_JUNK_SIZE),
+    S2("S2", Location.RESPONSE_PACKET_JUNK_SIZE),
+    S3("S3", Location.COOKIE_REPLY_PACKET_JUNK_SIZE),
+    S4("S4", Location.TRANSPORT_PACKET_JUNK_SIZE),
+    H1("H1", Location.INIT_PACKET_MAGIC_HEADER),
+    H2("H2", Location.RESPONSE_PACKET_MAGIC_HEADER),
+    H3("H3", Location.UNDERLOAD_PACKET_MAGIC_HEADER),
+    H4("H4", Location.TRANSPORT_PACKET_MAGIC_HEADER),
+    I1("I1", Location.SPECIAL_JUNK_I1),
+    I2("I2", Location.SPECIAL_JUNK_I2),
+    I3("I3", Location.SPECIAL_JUNK_I3),
+    I4("I4", Location.SPECIAL_JUNK_I4),
+    I5("I5", Location.SPECIAL_JUNK_I5),
+    HEADER_PROTECTION_KEY("HeaderProtectionKey", unsupportedSection = Section.INTERFACE),
+    REKEY_AFTER_TIME("RekeyAfterTime", unsupportedSection = Section.INTERFACE),
+    REKEY_TIMEOUT("RekeyTimeout", unsupportedSection = Section.INTERFACE),
+    REJECT_AFTER_TIME("RejectAfterTime", unsupportedSection = Section.INTERFACE),
+    KEEPALIVE_TIMEOUT("KeepaliveTimeout", unsupportedSection = Section.INTERFACE),
+    MAX_HANDSHAKE_ATTEMPTS("MaxHandshakeAttempts", unsupportedSection = Section.INTERFACE),
+    CONTENT_PADDING_ADDITION("ContentPaddingAddition", unsupportedSection = Section.INTERFACE),
+    RANDOM_TRAILERS("RandomTrailers", unsupportedSection = Section.INTERFACE),
+    DISABLE_COOKIES("DisableCookies", unsupportedSection = Section.INTERFACE),
+    ADVANCED_SECURITY("AdvancedSecurity", unsupportedSection = Section.PEER),
+}
+
+internal fun BadConfigException.toSafeVpnError(): VpnError {
+    val category = when (reason) {
+        Reason.INVALID_KEY -> R.string.vpn_config_error_invalid_key
+        Reason.INVALID_NUMBER -> R.string.vpn_config_error_invalid_number
+        Reason.INVALID_VALUE -> R.string.vpn_config_error_invalid_value
+        Reason.MISSING_ATTRIBUTE -> R.string.vpn_config_error_missing_parameter
+        Reason.MISSING_SECTION -> R.string.vpn_config_error_missing_section
+        Reason.SYNTAX_ERROR -> R.string.vpn_config_error_syntax
+        Reason.UNKNOWN_ATTRIBUTE -> R.string.vpn_config_error_unknown_parameter
+        Reason.UNKNOWN_SECTION -> R.string.vpn_config_error_unknown_section
+    }
+    val parameter = if (reason == Reason.UNKNOWN_ATTRIBUTE) {
+        // The pinned parser stores the attribute name for this reason. Match it against fixed
+        // labels in the matching section, and never return the original exception text.
+        val attribute = text?.toString()
+        AwgParameter.entries.firstOrNull {
+            it.unsupportedSection == section && it.label.equals(attribute, ignoreCase = true)
+        }
+    } else {
+        AwgParameter.entries.firstOrNull { it.location == location }
+    }
+    return VpnError(category, parameter)
+}

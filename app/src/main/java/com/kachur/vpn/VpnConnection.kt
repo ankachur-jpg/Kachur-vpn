@@ -15,6 +15,8 @@ internal enum class VpnPhase(val label: Int) {
     STOPPING(R.string.vpn_phase_stopping),
 }
 
+internal class VpnStartOptions(val profile: AwgConfig, val exclusions: Set<String>)
+
 // State is owned by the main thread. Only the attempt ID crosses the service Intent.
 internal object VpnConnection {
     var phase = VpnPhase.IDLE
@@ -41,11 +43,12 @@ internal object VpnConnection {
     private var nextAttempt = 0L
     private var active: Attempt? = null
 
-    private class Attempt(val id: Long, var profile: AwgConfig?) {
+    private class Attempt(val id: Long, var options: VpnStartOptions?) {
         var request: Future<*>? = null
         var deadline: Runnable? = null
         var cancelService: (() -> Unit)? = null
         var completionMessage = R.string.vpn_disconnected
+        var reconnectContext: Context? = null
     }
 
     fun observe(observer: () -> Unit) {
@@ -71,7 +74,8 @@ internal object VpnConnection {
 
     fun start(context: Context, config: AwgConfig) {
         if (phase != VpnPhase.IDLE) return
-        val attempt = Attempt(++nextAttempt, config)
+        val exclusions = SplitTunnelingSettings(context).excludedPackages()
+        val attempt = Attempt(++nextAttempt, VpnStartOptions(config, exclusions))
         active = attempt
         serviceLaunch = R.string.vpn_requesting_service
         serviceResponse = R.string.vpn_service_awaiting_reply
@@ -113,14 +117,14 @@ internal object VpnConnection {
         }
     }
 
-    fun claim(id: Long, cancel: () -> Unit): AwgConfig? {
+    fun claim(id: Long, cancel: () -> Unit): VpnStartOptions? {
         val attempt = active?.takeIf { it.id == id && phase == VpnPhase.STARTING } ?: return null
-        val profile = attempt.profile ?: return null
-        attempt.profile = null
+        if (attempt.cancelService != null) return null
+        val options = attempt.options ?: return null
         attempt.cancelService = cancel
         serviceResponse = R.string.vpn_service_started
         publish(VpnPhase.STARTING, R.string.vpn_service_started)
-        return profile
+        return options
     }
 
     fun foregroundReady(id: Long) {
@@ -152,13 +156,18 @@ internal object VpnConnection {
     }
 
     fun serviceFailed(id: Long, message: Int, error: VpnError = VpnError(message)) {
-        val attempt = active?.takeIf { it.id == id && phase != VpnPhase.STOPPING } ?: return
-        stopAttempt(attempt, message, error)
+        val attempt = active?.takeIf { it.id == id } ?: return
+        if (phase != VpnPhase.STOPPING) {
+            stopAttempt(attempt, message, error)
+        } else if (attempt.reconnectContext != null && message == R.string.vpn_permission_revoked) {
+            cancelReconnect(attempt, message)
+            publish(VpnPhase.STOPPING, message, error)
+        }
     }
 
     fun serviceStopRejected(id: Long) {
         val attempt = active?.takeIf { it.id == id } ?: return
-        attempt.completionMessage = R.string.vpn_stop_error
+        cancelReconnect(attempt, R.string.vpn_stop_error)
         record(R.string.vpn_stop_error, error = VpnError(R.string.vpn_stop_error))
     }
 
@@ -174,7 +183,28 @@ internal object VpnConnection {
             phase == VpnPhase.STARTING -> R.string.vpn_service_ended_during_start
             else -> null
         }
+        val reconnectContext = attempt.reconnectContext.takeIf { error == null }
+        val profile = attempt.options?.profile
         finish(attempt, error ?: attempt.completionMessage, error?.let { VpnError(it) })
+        if (reconnectContext != null && profile != null) start(reconnectContext, profile)
+    }
+
+    fun routingNeedsReconnect(exclusions: Set<String>): Boolean {
+        val options = active?.options ?: return false
+        return (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE) && options.exclusions != exclusions
+    }
+
+    fun reconnectWithSavedExclusions(context: Context) {
+        val exclusions = SplitTunnelingSettings(context).excludedPackages()
+        if (!routingNeedsReconnect(exclusions)) return
+        val attempt = checkNotNull(active)
+        val options = checkNotNull(attempt.options)
+        if (options.profile.includedAppsAfterExclusions(exclusions)?.isEmpty() == true) {
+            publish(phase, R.string.split_no_included_apps, VpnError(R.string.split_no_included_apps))
+            return
+        }
+        attempt.reconnectContext = context.applicationContext
+        stopAttempt(attempt, R.string.vpn_disconnected)
     }
 
     fun stop() {
@@ -192,7 +222,7 @@ internal object VpnConnection {
         when {
             attempt == null -> publish(VpnPhase.IDLE, R.string.vpn_reset_done)
             phase == VpnPhase.STOPPING -> {
-                attempt.completionMessage = R.string.vpn_reset_done
+                cancelReconnect(attempt, R.string.vpn_reset_done)
                 record(R.string.vpn_reset_stopping)
             }
             else -> stopAttempt(attempt, R.string.vpn_reset_done)
@@ -200,7 +230,7 @@ internal object VpnConnection {
     }
 
     private fun stopAttempt(attempt: Attempt, message: Int, error: VpnError? = null) {
-        attempt.profile = null
+        if (attempt.reconnectContext == null) attempt.options = null
         attempt.request?.cancel(true)
         attempt.request = null
         val cancel = attempt.cancelService
@@ -217,6 +247,7 @@ internal object VpnConnection {
         val status = when {
             error != null -> message
             message == R.string.vpn_reset_done -> R.string.vpn_reset_stopping
+            attempt.reconnectContext != null -> R.string.split_reconnecting
             else -> R.string.vpn_stopping
         }
         publish(VpnPhase.STOPPING, status, error)
@@ -229,10 +260,17 @@ internal object VpnConnection {
 
     private fun finish(attempt: Attempt, message: Int, error: VpnError? = null) {
         clearDeadline(attempt)
-        attempt.profile = null
+        attempt.options = null
+        attempt.reconnectContext = null
         attempt.cancelService = null
         active = null
         publish(VpnPhase.IDLE, message, error)
+    }
+
+    private fun cancelReconnect(attempt: Attempt, message: Int) {
+        attempt.reconnectContext = null
+        attempt.options = null
+        attempt.completionMessage = message
     }
 
     private fun setDeadline(attempt: Attempt, timeoutMs: Long, action: () -> Unit) {

@@ -182,6 +182,40 @@ class AwgBackendConfigTest {
         assertTrue(error.unsupportedOption)
     }
 
+    @Test
+    fun appExclusionsReachTheGoBackendConfigAndPreserveImportedRules() {
+        val imported = profile(
+            "ExcludedApplications = com.example.fromprofile, com.example.overlap",
+            "PersistentKeepalive = 22 - 35",
+        )
+        val applied = imported.toBackendConfig(setOf("com.example.overlap", "com.example.direct"))
+        assertEquals(
+            setOf("com.example.fromprofile", "com.example.overlap", "com.example.direct"),
+            applied.getInterface().excludedApplications,
+        )
+        assertTrue(applied.getInterface().includedApplications.isEmpty())
+        assertEquals("22-35", applied.peers.single().persistentKeepalive.orElseThrow())
+        assertEquals(
+            setOf("com.example.fromprofile", "com.example.overlap"),
+            imported.toBackendConfig().getInterface().excludedApplications,
+        )
+        assertEquals(
+            setOf("com.example.direct"),
+            profile().toBackendConfig(setOf("com.example.direct")).getInterface().excludedApplications,
+        )
+    }
+
+    @Test
+    fun appExclusionsNarrowAnAllowlistWithoutOpeningTheTunnelToOtherApps() {
+        val imported = profile("IncludedApplications = com.example.first, com.example.second")
+        val applied = imported.toBackendConfig(setOf("com.example.first", "com.example.outside"))
+        assertEquals(setOf("com.example.second"), applied.getInterface().includedApplications)
+        assertTrue(applied.getInterface().excludedApplications.isEmpty())
+        assertThrows(NoIncludedVpnAppsException::class.java) {
+            imported.toBackendConfig(setOf("com.example.first", "com.example.second"))
+        }
+    }
+
     private fun assertBackendParserError(
         profile: AwgConfig,
         reason: Reason,

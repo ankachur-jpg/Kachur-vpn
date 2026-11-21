@@ -149,11 +149,10 @@ class ConfigImportActivityTest {
     }
 
     @Test
-    fun connectionButtonExplainsMissingProfileAndUnavailableEngine() {
+    fun connectionButtonRequiresProfileAndStatusFollowsService() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
-            assertEquals(activity.getString(R.string.vpn_disconnected), text(activity, R.id.connection_status))
             assertTrue(connect.performClick())
             assertEquals(activity.getString(R.string.vpn_profile_required), text(activity, R.id.connection_status))
 
@@ -161,16 +160,20 @@ class ConfigImportActivityTest {
             deliverDocument(activity)
             awaitFeedback(activity, R.string.profile_imported)
             val diagnostics = text(activity, R.id.import_diagnostics)
-            assertEquals(activity.getString(R.string.vpn_disconnected), text(activity, R.id.connection_status))
-            assertTrue(connect.performClick())
-            assertEquals(activity.getString(R.string.engine_unavailable), text(activity, R.id.connection_status))
-            assertEquals(activity.getString(R.string.profile_imported), text(activity, R.id.import_feedback))
-            assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
-            assertEquals(null, shadowOf(activity).nextStartedActivityForResult)
+            try {
+                VpnConnection.publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+                assertEquals(activity.getString(R.string.vpn_waiting_handshake), text(activity, R.id.connection_status))
+                assertEquals(activity.getString(R.string.vpn_disconnect), connect.text.toString())
+                assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
 
-            controller.recreate()
-            val recreated = controller.get()
-            assertEquals(recreated.getString(R.string.engine_unavailable), text(recreated, R.id.connection_status))
+                controller.recreate()
+                val recreated = controller.get()
+                assertEquals(recreated.getString(R.string.vpn_waiting_handshake), text(recreated, R.id.connection_status))
+                VpnConnection.publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
+                assertEquals(recreated.getString(R.string.vpn_handshake_received), text(recreated, R.id.connection_status))
+            } finally {
+                VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected)
+            }
         }
     }
 

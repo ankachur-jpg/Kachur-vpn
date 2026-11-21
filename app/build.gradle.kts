@@ -17,12 +17,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    sourceSets["main"].assets.srcDir(rootProject.file("third_party/amneziawg/build/assets"))
     testOptions.unitTests.isIncludeAndroidResources = true
     kotlinOptions { jvmTarget = "17" }
 }
 
 dependencies {
+    implementation(files(rootProject.file("third_party/amneziawg/build/tunnel.aar")))
     implementation("androidx.activity:activity:1.10.1")
+    implementation("androidx.collection:collection:1.4.0")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("junit:junit:4.13.2")
 }

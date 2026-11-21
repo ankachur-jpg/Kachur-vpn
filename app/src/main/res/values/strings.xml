@@ -5,7 +5,6 @@
     <string name="import_profile">Импортировать .conf</string>
     <string name="connect_vpn">Подключить VPN</string>
     <string name="vpn_profile_required">VPN не подключён. Сначала импортируйте профиль .conf.</string>
-    <string name="engine_unavailable">VPN не подключён. В этой сборке отсутствует движок AmneziaWG 2.0.</string>
     <string name="picker_unavailable">Системный выбор файлов недоступен.</string>
     <string name="profile_imported">Профиль импортирован.</string>
     <string name="unnamed_profile">Импортированный профиль</string>
@@ -36,4 +35,19 @@
     <string name="config_missing_peer">В конфигурации отсутствует раздел [Peer].</string>
     <string name="config_missing_private_key">В разделе [Interface] отсутствует PrivateKey. Строка %1$d.</string>
     <string name="config_missing_public_key">В разделе [Peer] отсутствует PublicKey. Строка %1$d.</string>
+    <string name="vpn_disconnect">Отключить VPN</string>
+    <string name="vpn_waiting_permission">Подтвердите системное разрешение на VPN.</string>
+    <string name="vpn_permission_denied">VPN не подключён. Системное разрешение не предоставлено.</string>
+    <string name="vpn_permission_unavailable">Не удалось открыть запрос разрешения Android.</string>
+    <string name="vpn_permission_revoked">Android отозвал разрешение. VPN отключён.</string>
+    <string name="vpn_starting">Запуск туннеля AmneziaWG…</string>
+    <string name="vpn_waiting_handshake">Туннель запущен. Ожидается первый обмен ключами с сервером.</string>
+    <string name="vpn_handshake_received">Туннель активен. Получено подтверждение обмена ключами.</string>
+    <string name="vpn_stopping">Отключение VPN…</string>
+    <string name="vpn_notification">Служба туннеля AmneziaWG запущена.</string>
+    <string name="vpn_start_error">Не удалось запустить туннель AmneziaWG.</string>
+    <string name="vpn_stop_error">При завершении туннеля произошла ошибка.</string>
+    <string name="vpn_dns_error">Не удалось разрешить имя сервера VPN.</string>
+    <string name="vpn_native_error">Не удалось загрузить нативный движок AmneziaWG.</string>
+    <string name="vpn_backend_invalid_profile">Движок AWG 2.0 не принимает параметры этого профиля.</string>
 </resources>

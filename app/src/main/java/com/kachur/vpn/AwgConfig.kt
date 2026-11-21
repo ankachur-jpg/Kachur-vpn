@@ -15,6 +15,10 @@ internal class AwgConfig(
 
 internal class ConfigSection(private val fields: Map<String, String>) {
     operator fun get(field: String): String? = fields[field.lowercase()]
+
+    internal fun appendFields(destination: StringBuilder) {
+        fields.forEach { (name, value) -> destination.appendLine("$name = $value") }
+    }
 }
 
 internal class ConfigFormatException(

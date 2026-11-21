@@ -1,0 +1,8 @@
+AmneziaWG for Android 2.0.1, Apache License 2.0
+https://github.com/amnezia-vpn/amneziawg-android/tree/fb64e74ba5a0a54e9185b8776bcb8088afb772c9
+Copyright WireGuard LLC and upstream contributors.
+GoBackend and the Android native wrapper were modified by Kachur VPN.
+
+amneziawg-go v0.2.18, MIT License
+https://github.com/amnezia-vpn/amneziawg-go/tree/v0.2.18
+See the bundled license files for full notices and the Go dependencies.

@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.ContentResolver
 import android.content.Intent
 import android.graphics.Color
+import android.net.VpnService
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -24,7 +25,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
     private lateinit var connectionStatus: TextView
-    private var connectRequested = false
+    private var permissionPending = false
+    private var permissionMessage: Int? = null
+
+    private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        permissionPending = false
+        val profile = session.profile
+        when {
+            result.resultCode != Activity.RESULT_OK -> permissionMessage = R.string.vpn_permission_denied
+            profile == null -> permissionMessage = R.string.vpn_profile_required
+            else -> VpnConnection.start(this, profile.config)
+        }
+        render()
+    }
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         session.record(R.string.import_result_received)
@@ -47,7 +60,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         session = ViewModelProvider(this)[ImportSession::class.java]
-        connectRequested = savedInstanceState?.getBoolean(CONNECT_REQUESTED) == true
+        permissionPending = savedInstanceState?.getBoolean(PERMISSION_PENDING) == true
+        permissionMessage = savedInstanceState?.getInt(PERMISSION_MESSAGE, 0)?.takeIf { it != 0 }
 
         if (!session.busy && savedInstanceState != null) {
             when {
@@ -74,10 +88,7 @@ class MainActivity : ComponentActivity() {
         connectButton = Button(this).apply {
             id = R.id.connect_vpn_button
             setText(R.string.connect_vpn)
-            setOnClickListener {
-                connectRequested = true
-                renderConnectionStatus()
-            }
+            setOnClickListener { toggleVpn() }
         }
         layout.addView(connectButton)
         diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
@@ -110,6 +121,17 @@ class MainActivity : ComponentActivity() {
         render()
     }
 
+    override fun onStart() {
+        super.onStart()
+        VpnConnection.onChange = ::render
+        render()
+    }
+
+    override fun onStop() {
+        VpnConnection.onChange = null
+        super.onStop()
+    }
+
     override fun onPostResume() {
         super.onPostResume()
         if (session.picking) {
@@ -123,7 +145,8 @@ class MainActivity : ComponentActivity() {
         // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
         outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
         outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
-        outState.putBoolean(CONNECT_REQUESTED, connectRequested)
+        outState.putBoolean(PERMISSION_PENDING, permissionPending)
+        permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
     }
 
     override fun onDestroy() {
@@ -141,7 +164,7 @@ class MainActivity : ComponentActivity() {
 
     private fun selectConfig() {
         if (session.busy) return
-        connectRequested = false
+        permissionMessage = null
         session.startPicker()
         val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -171,22 +194,48 @@ class MainActivity : ComponentActivity() {
             else -> getString(message)
         }
         feedback.visibility = if (feedback.text.isEmpty()) View.GONE else View.VISIBLE
-        importButton.isEnabled = !session.busy
-        connectButton.isEnabled = !session.busy
-        renderConnectionStatus()
+        val phase = VpnConnection.phase
+        val canStop = phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE
+        importButton.isEnabled = !session.busy && !permissionPending && phase == VpnPhase.IDLE
+        connectButton.isEnabled = !session.busy && !permissionPending && (canStop || phase == VpnPhase.IDLE)
+        connectButton.setText(if (canStop) R.string.vpn_disconnect else R.string.connect_vpn)
+        val connectionMessage = when {
+            phase != VpnPhase.IDLE -> VpnConnection.message
+            permissionPending -> R.string.vpn_waiting_permission
+            else -> permissionMessage ?: VpnConnection.message
+        }
+        connectionStatus.setText(connectionMessage)
     }
 
-    private fun renderConnectionStatus() {
-        val message = when {
-            !connectRequested -> R.string.vpn_disconnected
-            session.profile == null -> R.string.vpn_profile_required
-            else -> R.string.engine_unavailable
+    private fun toggleVpn() {
+        if (VpnConnection.phase != VpnPhase.IDLE) {
+            VpnConnection.stop(this)
+            return
         }
-        connectionStatus.setText(message)
+        val profile = session.profile
+        permissionMessage = null
+        if (profile == null) {
+            permissionMessage = R.string.vpn_profile_required
+        } else {
+            try {
+                val consent = VpnService.prepare(this)
+                if (consent == null) {
+                    VpnConnection.start(this, profile.config)
+                } else {
+                    permissionPending = true
+                    vpnPermission.launch(consent)
+                }
+            } catch (_: RuntimeException) {
+                permissionPending = false
+                permissionMessage = R.string.vpn_permission_unavailable
+            }
+        }
+        render()
     }
 
     private companion object {
-        const val CONNECT_REQUESTED = "connect_requested"
+        const val PERMISSION_PENDING = "vpn_permission_pending"
+        const val PERMISSION_MESSAGE = "vpn_permission_message"
         const val PICKER_IN_PROGRESS = "config_picker_in_progress"
         const val IMPORT_IN_PROGRESS = "config_import_in_progress"
     }

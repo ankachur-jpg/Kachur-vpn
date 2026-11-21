@@ -1,0 +1,402 @@
+--- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
++++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
+@@ -42,7 +42,9 @@
+  * AmneziaWG tunnels.
+  */
+ @NonNullForAll
++// Modified by Kachur VPN: explicit service ownership and redacted diagnostics.
+ public final class GoBackend implements Backend {
++    @Nullable private android.net.VpnService managedService;
+     private static final int DNS_RESOLUTION_RETRIES = 10;
+     private static final String TAG = "AmneziaWG/GoBackend";
+     @Nullable private static AlwaysOnCallback alwaysOnCallback;
+@@ -51,7 +53,6 @@
+     @Nullable private Config currentConfig;
+     @Nullable private Tunnel currentTunnel;
+     private int currentTunnelHandle = -1;
+-    @Nullable private Thread statusThread;
+     @Nullable private StatusCallback statusCallback;
+ 
+     /**
+@@ -62,6 +63,11 @@
+     public GoBackend(final Context context) {
+         SharedLibraryLoader.loadSharedLibrary(context, "wg-go");
+         this.context = context;
++    }
++
++    public GoBackend(final Context context, final android.net.VpnService service) {
++        this(context);
++        managedService = service;
+     }
+ 
+     /**
+@@ -188,19 +194,17 @@
+             return -2;
+         }
+ 
++        long latest = 0L;
+         for (final String line : config.split("\\n")) {
+             if (line.startsWith("last_handshake_time_sec=")) {
+                 try {
+-                    return Long.parseLong(line.substring(24));
++                    latest = Math.max(latest, Long.parseLong(line.substring(24)));
+                 } catch (final NumberFormatException ignored) {
+-                    Log.e(TAG, "Failed to parse last_handshake_time_sec");
+                     return -2;
+                 }
+             }
+         }
+-
+-        Log.e(TAG, "Failed to get last_handshake_time_sec");
+-        return -1;
++        return latest;
+     }
+ 
+     /**
+@@ -210,67 +214,6 @@
+      */
+     public void setStatusCallback(@Nullable final StatusCallback callback) {
+         this.statusCallback = callback;
+-    }
+-
+-    /**
+-     * Launch a background thread to poll handshake status and determine connection state.
+-     * This is called after tunnel creation to wait for the first successful handshake.
+-     */
+-    private void launchStatusJob() {
+-        stopStatusJob();
+-        Log.d(TAG, "Launch status job");
+-        statusThread = new Thread(() -> {
+-            while (!Thread.currentThread().isInterrupted()) {
+-                final long lastHandshake = getLastHandshake(currentTunnel);
+-
+-                // Check if tunnel is no longer active (race condition protection)
+-                if (lastHandshake == -3L) {
+-                    Log.d(TAG, "Tunnel is no longer active, stopping status job");
+-                    break;
+-                }
+-
+-                // 0 means no handshake yet, wait and retry
+-                if (lastHandshake == 0L) {
+-                    try {
+-                        Thread.sleep(1000);
+-                    } catch (final InterruptedException e) {
+-                        Thread.currentThread().interrupt();
+-                        break;
+-                    }
+-                    continue;
+-                }
+-
+-                // Only positive handshake time indicates successful connection
+-                // -1 may be returned if unable to parse output (doesn't mean no connection)
+-                // -2 indicates command execution error (also doesn't mean no connection)
+-                if (lastHandshake > 0L) {
+-                    if (statusCallback != null) {
+-                        statusCallback.onStatusChanged(true);
+-                    }
+-                    break;
+-                }
+-
+-                // For -1 or -2, retry after delay instead of reporting disconnected
+-                try {
+-                    Thread.sleep(1000);
+-                } catch (final InterruptedException e) {
+-                    Thread.currentThread().interrupt();
+-                    break;
+-                }
+-            }
+-            statusThread = null;
+-        }, "StatusJob");
+-        statusThread.start();
+-    }
+-
+-    /**
+-     * Stop the status polling thread if running.
+-     */
+-    private void stopStatusJob() {
+-        if (statusThread != null) {
+-            statusThread.interrupt();
+-            statusThread = null;
+-        }
+     }
+ 
+     /**
+@@ -330,20 +273,9 @@
+             if (VpnService.prepare(context) != null)
+                 throw new BackendException(Reason.VPN_NOT_AUTHORIZED);
+ 
+-            final VpnService service;
+-            if (!vpnService.isDone()) {
+-                Log.d(TAG, "Requesting to start VpnService");
+-                context.startService(new Intent(context, VpnService.class));
+-            }
+-
+-            try {
+-                service = vpnService.get(2, TimeUnit.SECONDS);
+-            } catch (final TimeoutException e) {
+-                final Exception be = new BackendException(Reason.UNABLE_TO_START_VPN);
+-                be.initCause(e);
+-                throw be;
+-            }
+-            service.setOwner(this);
++            final android.net.VpnService service = managedService;
++            if (service == null)
++                throw new BackendException(Reason.UNABLE_TO_START_VPN);
+ 
+             if (currentTunnelHandle != -1) {
+                 Log.w(TAG, "Tunnel already up");
+@@ -359,11 +291,11 @@
+                         continue;
+                     if (ep.getResolved().orElse(null) == null) {
+                         if (i < DNS_RESOLUTION_RETRIES - 1) {
+-                            Log.w(TAG, "DNS host \"" + ep.getHost() + "\" failed to resolve; trying again");
++                            Log.w(TAG, "Endpoint DNS resolution failed; trying again");
+                             Thread.sleep(1000);
+                             continue dnsRetry;
+                         } else
+-                            throw new BackendException(Reason.DNS_RESOLUTION_FAILURE, ep.getHost());
++                            throw new BackendException(Reason.DNS_RESOLUTION_FAILURE);
+                     }
+                 }
+                 break;
+@@ -373,7 +305,7 @@
+             final String goConfig = config.toAwgUserspaceString();
+ 
+             // Create the vpn tunnel with android API
+-            final VpnService.Builder builder = service.getBuilder();
++            final VpnService.Builder builder = service.new Builder();
+             builder.setSession(tunnel.getName());
+ 
+             for (final String excludedApplication : config.getInterface().getExcludedApplications())
+@@ -423,27 +355,28 @@
+             if (currentTunnelHandle < 0)
+                 throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
+ 
++            final int socketV4 = awgGetSocketV4(currentTunnelHandle);
++            final int socketV6 = awgGetSocketV6(currentTunnelHandle);
++            if ((socketV4 < 0 && socketV6 < 0)
++                    || (socketV4 >= 0 && !service.protect(socketV4))
++                    || (socketV6 >= 0 && !service.protect(socketV6))) {
++                awgTurnOff(currentTunnelHandle);
++                currentTunnelHandle = -1;
++                throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE);
++            }
+             currentTunnel = tunnel;
+             currentConfig = config;
+-
+-            service.protect(awgGetSocketV4(currentTunnelHandle));
+-            service.protect(awgGetSocketV6(currentTunnelHandle));
+-
+-            launchStatusJob();
+         } else {
+             if (currentTunnelHandle == -1) {
+                 Log.w(TAG, "Tunnel already down");
+                 return;
+             }
+-            stopStatusJob();
+             int handleToClose = currentTunnelHandle;
+             currentTunnel = null;
+             currentTunnelHandle = -1;
+             currentConfig = null;
+             awgTurnOff(handleToClose);
+-            try {
+-                vpnService.get(0, TimeUnit.NANOSECONDS).stopSelf();
+-            } catch (final TimeoutException ignored) { }
++
+         }
+ 
+         tunnel.onStateChange(state);
+--- a/tunnel/tools/libwg-go/api-android.go
++++ b/tunnel/tools/libwg-go/api-android.go
+@@ -3,132 +3,53 @@
+  * Copyright © 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+  */
+ 
++// Modified by Kachur VPN: no profile logging, statistics-only JNI and TUN cleanup.
+ package main
+ 
+-// #cgo LDFLAGS: -llog
+-// #include <android/log.h>
+ import "C"
+ 
+ import (
+-	"fmt"
+ 	"math"
+-	"net"
+-	"os"
+-	"os/signal"
+-	"runtime"
+ 	"runtime/debug"
+ 	"strings"
+-	"unsafe"
+ 
+ 	"github.com/amnezia-vpn/amneziawg-go/conn"
+ 	"github.com/amnezia-vpn/amneziawg-go/device"
+-	"github.com/amnezia-vpn/amneziawg-go/ipc"
+ 	"github.com/amnezia-vpn/amneziawg-go/tun"
+ 	"golang.org/x/sys/unix"
+ )
+ 
+-type AndroidLogger struct {
+-	level C.int
+-	tag   *C.char
+-}
+-
+-func cstring(s string) *C.char {
+-	b, err := unix.BytePtrFromString(s)
+-	if err != nil {
+-		b := [1]C.char{}
+-		return &b[0]
+-	}
+-	return (*C.char)(unsafe.Pointer(b))
+-}
+-
+-func (l AndroidLogger) Printf(format string, args ...interface{}) {
+-	C.__android_log_write(l.level, l.tag, cstring(fmt.Sprintf(format, args...)))
+-}
+-
+ type TunnelHandle struct {
+-	device *device.Device
+-	uapi   net.Listener
++    device *device.Device
+ }
+ 
+ var tunnelHandles map[int32]TunnelHandle
+ 
+ func init() {
+ 	tunnelHandles = make(map[int32]TunnelHandle)
+-	signals := make(chan os.Signal)
+-	signal.Notify(signals, unix.SIGUSR2)
+-	go func() {
+-		buf := make([]byte, os.Getpagesize())
+-		for {
+-			select {
+-			case <-signals:
+-				n := runtime.Stack(buf, true)
+-				if n == len(buf) {
+-					n--
+-				}
+-				buf[n] = 0
+-				C.__android_log_write(C.ANDROID_LOG_ERROR, cstring("AmneziaWG/Stacktrace"), (*C.char)(unsafe.Pointer(&buf[0])))
+-			}
+-		}
+-	}()
++
+ }
+ 
+ //export awgTurnOn
+ func awgTurnOn(interfaceName string, tunFd int32, settings string) int32 {
+-	tag := cstring("AmneziaWG/" + interfaceName)
+-	logger := &device.Logger{
+-		Verbosef: AndroidLogger{level: C.ANDROID_LOG_DEBUG, tag: tag}.Printf,
+-		Errorf:   AndroidLogger{level: C.ANDROID_LOG_ERROR, tag: tag}.Printf,
+-	}
+-
+-	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
++    logger := device.NewLogger(device.LogLevelSilent, "")
++    tun, _, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
+ 	if err != nil {
+ 		unix.Close(int(tunFd))
+ 		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
+ 		return -1
+ 	}
+ 
+-	logger.Verbosef("Attaching to interface %v", name)
+-	device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
+-
+-	err = device.IpcSet(settings)
+-	if err != nil {
+-		unix.Close(int(tunFd))
+-		logger.Errorf("IpcSet: %v", err)
+-		return -1
+-	}
+-	device.DisableSomeRoamingForBrokenMobileSemantics()
+-
+-	var uapi net.Listener
+-
+-	uapiFile, err := ipc.UAPIOpen(name)
+-	if err != nil {
+-		logger.Errorf("UAPIOpen: %v", err)
+-	} else {
+-		uapi, err = ipc.UAPIListen(name, uapiFile)
+-		if err != nil {
+-			uapiFile.Close()
+-			logger.Errorf("UAPIListen: %v", err)
+-		} else {
+-			go func() {
+-				for {
+-					conn, err := uapi.Accept()
+-					if err != nil {
+-						return
+-					}
+-					go device.IpcHandle(conn)
+-				}
+-			}()
+-		}
+-	}
+-
+-	err = device.Up()
+-	if err != nil {
+-		logger.Errorf("Unable to bring up device: %v", err)
+-		uapiFile.Close()
+-		device.Close()
+-		return -1
+-	}
+-	logger.Verbosef("Device started")
++    device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
++    if err := device.IpcSet(settings); err != nil {
++        device.Close()
++        return -1
++    }
++    device.DisableSomeRoamingForBrokenMobileSemantics()
++    if err := device.Up(); err != nil {
++        device.Close()
++        return -1
++    }
+ 
+ 	var i int32
+ 	for i = 0; i < math.MaxInt32; i++ {
+@@ -137,12 +58,10 @@
+ 		}
+ 	}
+ 	if i == math.MaxInt32 {
+-		logger.Errorf("Unable to find empty handle")
+-		uapiFile.Close()
+ 		device.Close()
+ 		return -1
+ 	}
+-	tunnelHandles[i] = TunnelHandle{device: device, uapi: uapi}
++	tunnelHandles[i] = TunnelHandle{device: device}
+ 	return i
+ }
+ 
+@@ -153,9 +72,6 @@
+ 		return
+ 	}
+ 	delete(tunnelHandles, tunnelHandle)
+-	if handle.uapi != nil {
+-		handle.uapi.Close()
+-	}
+ 	handle.device.Close()
+ }
+ 
+@@ -203,7 +119,18 @@
+ 	if err != nil {
+ 		return nil
+ 	}
+-	return C.CString(settings)
++	var stats strings.Builder
++    for _, line := range strings.Split(settings, "\n") {
++        if strings.HasPrefix(line, "last_handshake_time_sec=") ||
++            strings.HasPrefix(line, "last_handshake_time_nsec=") ||
++            strings.HasPrefix(line, "public_key=") ||
++            strings.HasPrefix(line, "rx_bytes=") ||
++            strings.HasPrefix(line, "tx_bytes=") {
++            stats.WriteString(line)
++            stats.WriteByte('\n')
++        }
++    }
++    return C.CString(stats.String())
+ }
+ 
+ //export awgVersion

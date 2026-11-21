@@ -665,13 +665,17 @@ class ConfigImportActivityTest {
     fun automaticRecoverySwitchDefaultsToOnAndPersistsSeparatelyFromLaunchSetting() {
         val context = RuntimeEnvironment.getApplication()
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
-            val toggle = controller.get().findViewById<Switch>(R.id.vpn_auto_recovery)
+            val activity = controller.get()
+            activity.findViewById<Button>(R.id.ui_open_settings).performClick()
+            val toggle = activity.findViewById<Switch>(R.id.vpn_auto_recovery)
             assertTrue(toggle.isChecked)
             toggle.performClick()
             assertFalse(VpnLaunchSettings(context).recoveryEnabled)
         }
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
-            assertFalse(controller.get().findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
+            val activity = controller.get()
+            activity.findViewById<Button>(R.id.ui_open_settings).performClick()
+            assertFalse(activity.findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
             assertTrue(VpnLaunchSettings(context).enabled)
         }
     }

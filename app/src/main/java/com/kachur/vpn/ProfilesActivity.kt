@@ -10,13 +10,11 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.PopupMenu
-import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModelProvider
 
-class ProfilesActivity : ComponentActivity() {
+class ProfilesActivity : KachurActivity() {
     private val session by lazy { ViewModelProvider(this)[ImportSession::class.java] }
     private val labels by lazy { VpnProfileLabels(applicationContext) }
     private lateinit var rows: LinearLayout
@@ -24,6 +22,9 @@ class ProfilesActivity : ComponentActivity() {
     private lateinit var importButton: Button
     private var pendingRemoval: String? = null
     private var resumed = false
+    private var renderedRows: RowsState? = null
+    private data class RowsState(val catalog: ProfileCatalog, val working: Boolean, val phase: VpnPhase,
+        val activeId: String?, val checkingRoutes: Boolean)
     private val observer: () -> Unit = {
         finishPendingRemoval()
         render()
@@ -35,21 +36,10 @@ class ProfilesActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         pendingRemoval = savedInstanceState?.getString(PENDING_REMOVAL)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(8), dp(16), dp(20))
-        }
-        content.addView(Button(this).apply {
-            setText(R.string.split_back)
-            setOnClickListener { finish() }
-        })
-        content.addView(TextView(this).apply {
-            setText(R.string.profiles_title)
-            textSize = 24f
-        })
-        importButton = Button(this).apply {
+        val content = uiColumn(18)
+        content.uiAdd(uiHeader(R.string.profiles_title) { finish() })
+        importButton = uiButton(R.string.profiles_import, primary = true).apply {
             id = R.id.profiles_import
-            setText(R.string.profiles_import)
             setOnClickListener {
                 session.startPicker()
                 try {
@@ -59,32 +49,21 @@ class ProfilesActivity : ComponentActivity() {
                 }
             }
         }
-        content.addView(importButton)
-        status = TextView(this).apply {
+        content.uiAdd(importButton, 16)
+        status = uiLabel(15, R.color.ui_muted).apply {
             id = R.id.profiles_status
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            setPadding(0, dp(4), 0, dp(8))
         }
-        content.addView(status)
-        rows = LinearLayout(this).apply {
-            id = R.id.profiles_list
-            orientation = LinearLayout.VERTICAL
-        }
-        content.addView(rows)
-        setContentView(ScrollView(this).apply {
-            addView(content)
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
-                insets
-            }
-        })
+        content.uiAdd(status, 10)
+        rows = uiColumn().apply { id = R.id.profiles_list }
+        content.uiAdd(rows)
+        setContentView(uiScroll(content).apply { uiInsets() })
         render()
     }
 
     override fun onStart() {
         super.onStart()
+        renderedRows = null
         VpnConnection.observe(observer)
         session.onChange = ::render
         session.syncSavedProfile(applicationContext)
@@ -136,6 +115,9 @@ class ProfilesActivity : ComponentActivity() {
             session.errorLine?.takeIf { !working }?.let { line -> getString(it, line) } ?: getString(it)
         }.orEmpty()
         status.visibility = if (message == null) View.GONE else View.VISIBLE
+        val nextRows = RowsState(session.catalog, working, VpnConnection.phase, VpnConnection.activeProfileId, VpnConnection.checkingRoutes)
+        if (renderedRows == nextRows) return
+        renderedRows = nextRows
         rows.removeAllViews()
         session.catalog.entries.forEach { profile -> addRow(profile, working) }
     }
@@ -144,37 +126,41 @@ class ProfilesActivity : ComponentActivity() {
         val profileId = profile.documentKey
         val selected = session.catalog.selectedId == profileId
         val inUse = VpnConnection.activeProfileId == profileId
-        val item = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(12), 0, dp(8))
+        val item = uiCard().apply {
+            if (selected) background = uiShape(R.color.ui_surface, 22, R.color.ui_accent)
         }
-        item.addView(TextView(this).apply {
+        item.uiAdd(uiLabel(22, bold = true).apply {
             text = profile.name
-            textSize = 18f
         })
-        item.addView(TextView(this).apply {
+        item.uiAdd(uiLabel(15, when {
+            inUse -> R.color.ui_good
+            selected -> R.color.ui_accent
+            else -> R.color.ui_muted
+        }).apply {
             text = listOfNotNull(labels.country(profileId), getString(R.string.profiles_selected).takeIf { selected },
                 getString(R.string.profiles_in_use).takeIf { inUse }).joinToString(" · ")
-        })
-        val actions = LinearLayout(this)
-        actions.addView(Button(this).apply {
+        }, 4)
+        val connect = uiButton(
+            if (VpnConnection.phase == VpnPhase.IDLE) R.string.profiles_connect else R.string.profiles_switch,
+            primary = selected,
+        ).apply {
             id = R.id.profiles_row_connect
-            setText(if (VpnConnection.phase == VpnPhase.IDLE) R.string.profiles_connect else R.string.profiles_switch)
+            contentDescription = getString(R.string.ui_profile_action, text, profile.name)
             isEnabled = !working && !inUse && !VpnConnection.checkingRoutes &&
                 VpnConnection.phase != VpnPhase.STARTING && VpnConnection.phase != VpnPhase.STOPPING
             setOnClickListener {
                 val request = ProfileConnectionRequest(profileId, VpnConnection.manualStopGeneration)
                 session.edit(applicationContext, request) { it.select(profileId) }
             }
-        })
-        actions.addView(Button(this).apply {
+        }
+        val actions = uiButton(R.string.profiles_actions, icon = R.drawable.ic_ui_more).apply {
             id = R.id.profiles_row_actions
-            setText(R.string.profiles_actions)
+            contentDescription = getString(R.string.ui_profile_action, text, profile.name)
             isEnabled = !working
             setOnClickListener { showActions(it, profile, selected) }
-        })
-        item.addView(actions)
-        rows.addView(item)
+        }
+        item.uiAdd(uiPair(connect, actions), 12)
+        rows.uiAdd(item, 12)
     }
 
     private fun showActions(anchor: View, profile: ImportedProfile, selected: Boolean) {
@@ -205,6 +191,7 @@ class ProfilesActivity : ComponentActivity() {
 
     private fun rename(profile: ImportedProfile) {
         val input = EditText(this).apply {
+            uiField()
             setSingleLine(true)
             filters = arrayOf(InputFilter.LengthFilter(100))
             setText(profile.name)
@@ -244,8 +231,6 @@ class ProfilesActivity : ComponentActivity() {
             session.edit(applicationContext) { it.remove(id) }
         } else session.showMessage(R.string.profiles_delete_stop_failed)
     }
-
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         internal const val PROFILE_ID = "selected_vpn_profile_id"

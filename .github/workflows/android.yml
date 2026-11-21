@@ -61,7 +61,7 @@ jobs:
           GOTOOLCHAIN=local go test -mod=mod -timeout=45s .
 
       - name: Test and build debug APK
-        run: gradle testDebugUnitTest assembleDebug --stacktrace
+        run: gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest --stacktrace
 
       - name: Verify AmneziaWG binaries and licenses in APK
         run: |
@@ -77,4 +77,29 @@ jobs:
         with:
           name: Kachur-VPN-debug
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Enable KVM for emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Test Views and capture Android screenshots
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 37
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
+          disable-animations: true
+          script: bash .github/scripts/capture-ui.sh
+
+      - name: Upload Android screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kachur-VPN-UI-screenshots
+          path: ui-screenshots/*.png
           if-no-files-found: error

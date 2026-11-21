@@ -7,7 +7,6 @@ import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
@@ -17,24 +16,29 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.text.InputFilter
-import android.text.method.ScrollingMovementMethod
+import android.text.format.Formatter
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.ViewCompat
 import androidx.lifecycle.ViewModelProvider
 import java.util.UUID
 import java.util.concurrent.Future
 
-class MainActivity : ComponentActivity() {
+class MainActivity : KachurActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
     private lateinit var activeProfile: TextView
@@ -49,6 +53,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var reconnectButton: Button
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
+    private lateinit var received: TextView
+    private lateinit var sent: TextView
+    private lateinit var home: ScrollView
+    private lateinit var settingsPage: ScrollView
+    private lateinit var navigation: LinearLayout
+    private var detailsOpen = false
+    private var statusColor = 0
+    private val backFromSettings = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = showSettings(false)
+    }
+    private val trafficObserver: () -> Unit = ::renderTraffic
     private val vpnObserver: () -> Unit = ::renderConnection
     private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
     private val downloadsObserver by lazy { splitSettings.onDownloadsChanged(::renderConnection) }
@@ -129,146 +144,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(18, 24, 35))
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                view.setPadding(
-                    insets.systemWindowInsetLeft + dp(12), insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight + dp(12), insets.systemWindowInsetBottom,
-                )
-                insets
-            }
-        }
-        connectionStatus = label("", 18f, Color.WHITE).apply {
-            id = R.id.connection_status
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        root.addView(connectionStatus)
-        connectButton = Button(this).apply {
-            id = R.id.connect_vpn_button
-            setOnClickListener { toggleVpn() }
-        }
-        root.addView(connectButton)
-        root.addView(Button(this).apply {
-            id = R.id.reset_vpn_button
-            setText(R.string.vpn_reset_connection)
-            setOnClickListener {
-                permissionRequest?.let(::clearPermissionRequest)
-                pendingProfileConnection = null
-                permissionMessage = null
-                launchSettings.setPaused(true)
-                VpnConnection.reset()
-                renderConnection()
-            }
-        })
-        connectionDiagnostics = TextView(this).apply {
-            id = R.id.connection_diagnostics
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.rgb(31, 41, 55))
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            maxHeight = (resources.displayMetrics.heightPixels * 0.42f).toInt()
-            movementMethod = ScrollingMovementMethod.getInstance()
-        }
-        // The VPN controls and diagnostics stay on screen when the import history scrolls.
-        root.addView(connectionDiagnostics)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, dp(8), 0, dp(12))
-        }
-        layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
-        profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
-        layout.addView(profileName)
-        activeProfile = label("", 15f, Color.LTGRAY)
-        layout.addView(activeProfile)
-        layout.addView(Button(this).apply {
-            id = R.id.profiles_open
-            setText(R.string.profiles_title)
-            setOnClickListener {
-                if (!session.busy && permissionRequest == null) {
-                    openProfiles.launch(Intent(this@MainActivity, ProfilesActivity::class.java))
-                }
-            }
-        })
-        profileCountry = Button(this).apply {
-            id = R.id.vpn_profile_country
-            setOnClickListener { editCountry() }
-        }
-        layout.addView(profileCountry)
-        autoConnect = Switch(this).apply {
-            id = R.id.vpn_auto_connect
-            setOnCheckedChangeListener { _, checked ->
-                if (launchSettings.enabled != checked) {
-                    launchSettings.setEnabled(checked)
-                    if (checked) {
-                        session.openChecked = false
-                        maybeAutoConnect()
-                    } else if (permissionRequest?.automatic == true) {
-                        permissionRequest?.let(::clearPermissionRequest)
-                        permissionMessage = null
-                    }
-                    renderConnection()
-                }
-            }
-        }
-        layout.addView(autoConnect)
-        autoRecovery = Switch(this).apply {
-            id = R.id.vpn_auto_recovery
-            setText(R.string.vpn_auto_recovery)
-            setTextColor(Color.WHITE)
-            isSaveEnabled = false
-            setOnCheckedChangeListener { _, checked ->
-                if (launchSettings.recoveryEnabled != checked) launchSettings.setRecoveryEnabled(checked)
-            }
-        }
-        layout.addView(autoRecovery)
-        notificationAccess = Button(this).apply {
-            id = R.id.vpn_notification_access
-            setText(R.string.vpn_notification_access)
-            setOnClickListener { openNotificationAccess() }
-        }
-        layout.addView(notificationAccess)
-        layout.addView(Button(this).apply {
-            id = R.id.split_open_button
-            setText(R.string.split_title)
-            setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
-        })
-        layout.addView(Button(this).apply {
-            id = R.id.backup_open_screen
-            setText(R.string.backup_title)
-            setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
-        })
-        layout.addView(Button(this).apply {
-            id = R.id.diag_open_screen
-            setText(R.string.diag_title)
-            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
-        })
-        reconnectButton = Button(this).apply {
-            id = R.id.main_split_reconnect_button
-            setText(R.string.split_apply_reconnect)
-            setOnClickListener { VpnConnection.reconnectWithSavedExclusions(applicationContext) }
-        }
-        layout.addView(reconnectButton)
-        diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
-        layout.addView(diagnostics)
-        feedback = label("", 16f, Color.LTGRAY).apply {
-            id = R.id.import_feedback
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        layout.addView(feedback)
-        importButton = Button(this).apply {
-            id = R.id.import_profile_button
-            setText(R.string.import_profile)
-            setOnClickListener { selectConfig() }
-        }
-        layout.addView(importButton)
-        root.addView(ScrollView(this).apply {
-            addView(layout)
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        setContentView(root)
+        buildInterface(savedInstanceState)
+
 
         session.onChange = {
             render()
@@ -292,6 +169,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         splitSettings.preferences.registerOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.observe(vpnObserver)
+        VpnTrafficUi.observe(trafficObserver)
         session.syncSavedProfile(applicationContext)
         render()
     }
@@ -299,6 +177,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         splitSettings.preferences.unregisterOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.removeObserver(vpnObserver)
+        VpnTrafficUi.removeObserver(trafficObserver)
         super.onStop()
     }
 
@@ -340,6 +219,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
+        outState.putBoolean("settings_open", backFromSettings.isEnabled)
+        outState.putBoolean("connection_details_open", detailsOpen)
         // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
         outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
         outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
@@ -363,14 +244,251 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+    private fun buildInterface(savedState: Bundle?) {
+        detailsOpen = savedState?.getBoolean("connection_details_open") == true
+        home = uiScroll(buildHome()).apply { ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.app_name)) }
+        settingsPage = uiScroll(buildSettings()).apply {
+            id = R.id.ui_settings_page
+            ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.ui_settings))
+        }
+        navigation = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = uiShape(R.color.ui_surface, 24, R.color.ui_border)
+            addNavigation(R.string.ui_servers, R.drawable.ic_ui_servers, R.id.profiles_open) {
+                if (!session.busy && permissionRequest == null) {
+                    openProfiles.launch(Intent(this@MainActivity, ProfilesActivity::class.java))
+                }
+            }
+            addNavigation(R.string.ui_diagnostics, R.drawable.ic_ui_chart, R.id.diag_open_screen) {
+                startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+            }
+            addNavigation(R.string.ui_settings, R.drawable.ic_ui_settings, R.id.ui_open_settings) { showSettings(true) }
+        }
+        val pages = FrameLayout(this).apply {
+            addView(home, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(settingsPage, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        }
+        val root = uiColumn().apply {
+            setBackgroundColor(getColor(R.color.ui_background))
+            addView(pages, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            addView(navigation, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                marginStart = dp(12)
+                marginEnd = dp(12)
+                bottomMargin = dp(8)
+            })
+            uiInsets()
+        }
+        setContentView(root)
+        onBackPressedDispatcher.addCallback(this, backFromSettings)
+        showSettings(savedState?.getBoolean("settings_open") == true)
+    }
 
-    private fun label(value: String, size: Float, color: Int) = TextView(this).apply {
-        text = value
-        textSize = size
-        setTextColor(color)
-        gravity = Gravity.CENTER
-        setPadding(0, 12, 0, 12)
+    private fun buildHome(): View = uiColumn(18).apply {
+        uiAdd(LinearLayout(this@MainActivity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.mipmap.ic_launcher)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(56), dp(56)))
+            addView(uiHeading(R.string.app_name, 29), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+                marginStart = dp(12)
+            })
+        })
+        uiAdd(uiColumn(20).apply {
+            background = uiGradient(R.color.ui_hero_start, R.color.ui_hero_end, 28)
+            gravity = Gravity.CENTER_HORIZONTAL
+            connectionStatus = uiLabel(22, bold = true).apply {
+                id = R.id.connection_status
+                gravity = Gravity.CENTER
+                setPaddingRelative(dp(14), dp(7), dp(14), dp(7))
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            addView(connectionStatus, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            connectButton = uiButton(R.string.connect_vpn, primary = true, icon = R.drawable.ic_ui_power).apply {
+                id = R.id.connect_vpn_button
+                minHeight = dp(76)
+                textSize = 19f
+                setOnClickListener { toggleVpn() }
+            }
+            uiAdd(connectButton, 20)
+        }, 16)
+        uiAdd(uiCard().apply {
+            uiAdd(uiCaption(R.string.ui_selected_server))
+            profileName = uiLabel(22, bold = true).apply { id = R.id.profile_name }
+            uiAdd(profileName, 3)
+            activeProfile = uiLabel(15, R.color.ui_muted)
+            uiAdd(activeProfile)
+            profileCountry = uiButton(0).apply {
+                id = R.id.vpn_profile_country
+                setOnClickListener { editCountry() }
+            }
+            uiAdd(profileCountry, 8)
+            importButton = uiButton(R.string.import_profile).apply {
+                id = R.id.import_profile_button
+                setOnClickListener { selectConfig() }
+            }
+            uiAdd(importButton, 8)
+            feedback = uiLabel(16).apply {
+                id = R.id.import_feedback
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            uiAdd(feedback, 8)
+            diagnostics = uiLabel(14, R.color.ui_muted).apply { id = R.id.import_diagnostics }
+            uiAdd(diagnostics, 6)
+        }, 14)
+        uiAdd(uiHeading(R.string.ui_traffic, 19), 18)
+        received = uiLabel(20, bold = true).apply { id = R.id.ui_traffic_received }
+        sent = uiLabel(20, bold = true).apply { id = R.id.ui_traffic_sent }
+        uiAdd(uiPair(trafficTile(R.string.ui_received, received), trafficTile(R.string.ui_sent, sent)), 8)
+        reconnectButton = uiButton(R.string.split_apply_reconnect).apply {
+            id = R.id.main_split_reconnect_button
+            setOnClickListener { VpnConnection.reconnectWithSavedExclusions(applicationContext) }
+        }
+        uiAdd(reconnectButton, 14)
+        val details = uiCard().apply {
+            visibility = if (detailsOpen) View.VISIBLE else View.GONE
+            connectionDiagnostics = uiLabel(14).apply {
+                id = R.id.connection_diagnostics
+                setTextIsSelectable(true)
+            }
+            uiAdd(connectionDiagnostics)
+            uiAdd(uiButton(R.string.vpn_reset_connection).apply {
+                id = R.id.reset_vpn_button
+                setOnClickListener {
+                    permissionRequest?.let(::clearPermissionRequest)
+                    pendingProfileConnection = null
+                    permissionMessage = null
+                    launchSettings.setPaused(true)
+                    VpnConnection.reset()
+                    renderConnection()
+                }
+            }, 8)
+        }
+        uiAdd(uiButton(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details).apply {
+            id = R.id.ui_connection_details
+            setOnClickListener {
+                detailsOpen = !detailsOpen
+                details.visibility = if (detailsOpen) View.VISIBLE else View.GONE
+                setText(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details)
+            }
+        }, 14)
+        uiAdd(details, 8)
+    }
+
+    private fun buildSettings(): View = uiColumn(18).apply {
+        uiAdd(uiHeader(R.string.ui_settings) { showSettings(false) })
+        uiAdd(uiCard().apply {
+            uiAdd(uiHeading(R.string.ui_appearance))
+            uiAdd(uiButton(0).apply {
+                id = R.id.ui_theme_choice
+                text = getString(R.string.ui_theme_value, getString(AppAppearance.read(context).label))
+                setOnClickListener { chooseTheme() }
+            }, 10)
+        }, 16)
+        uiAdd(uiCard().apply {
+            uiAdd(uiHeading(R.string.ui_connection))
+            autoConnect = Switch(this@MainActivity).apply {
+                id = R.id.vpn_auto_connect
+                uiSwitch()
+                isSaveEnabled = false
+                setOnCheckedChangeListener { _, checked ->
+                    if (launchSettings.enabled != checked) {
+                        launchSettings.setEnabled(checked)
+                        if (checked) {
+                            session.openChecked = false
+                            maybeAutoConnect()
+                        } else if (permissionRequest?.automatic == true) {
+                            permissionRequest?.let(::clearPermissionRequest)
+                            permissionMessage = null
+                        }
+                        renderConnection()
+                    }
+                }
+            }
+            uiAdd(autoConnect, 8)
+            autoRecovery = Switch(this@MainActivity).apply {
+                id = R.id.vpn_auto_recovery
+                uiSwitch()
+                setText(R.string.vpn_auto_recovery)
+                isSaveEnabled = false
+                setOnCheckedChangeListener { _, checked ->
+                    if (launchSettings.recoveryEnabled != checked) launchSettings.setRecoveryEnabled(checked)
+                }
+            }
+            uiAdd(autoRecovery)
+            notificationAccess = uiButton(R.string.vpn_notification_access).apply {
+                id = R.id.vpn_notification_access
+                setOnClickListener { openNotificationAccess() }
+            }
+            uiAdd(notificationAccess, 8)
+        }, 14)
+        uiAdd(uiCard().apply {
+            uiAdd(uiHeading(R.string.ui_routing_and_backup))
+            uiAdd(uiButton(R.string.split_title).apply {
+                id = R.id.split_open_button
+                setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
+            }, 10)
+            uiAdd(uiButton(R.string.ip_title).apply {
+                id = R.id.ui_open_ip_routes
+                setOnClickListener { startActivity(Intent(this@MainActivity, IpRoutesActivity::class.java)) }
+            }, 8)
+            uiAdd(uiButton(R.string.backup_title).apply {
+                id = R.id.backup_open_screen
+                setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
+            }, 8)
+        }, 14)
+    }
+
+    private fun chooseTheme() {
+        val current = AppAppearance.read(this)
+        val options = AppAppearance.entries.map { getString(it.label) }.toTypedArray()
+        AlertDialog.Builder(this).setTitle(R.string.ui_theme)
+            .setSingleChoiceItems(options, current.ordinal) { dialog, which ->
+                dialog.dismiss()
+                val selected = AppAppearance.entries[which]
+                if (selected != current) {
+                    selected.save(this)
+                    recreate()
+                }
+            }.setNegativeButton(android.R.string.cancel, null).show()
+    }
+
+    private fun showSettings(open: Boolean) {
+        home.visibility = if (open) View.GONE else View.VISIBLE
+        settingsPage.visibility = if (open) View.VISIBLE else View.GONE
+        navigation.visibility = if (open) View.GONE else View.VISIBLE
+        backFromSettings.isEnabled = open
+    }
+
+    private fun LinearLayout.addNavigation(label: Int, glyph: Int, viewId: Int, open: () -> Unit) {
+        addView(uiButton(label).apply {
+            id = viewId
+            textSize = 13f
+            minHeight = dp(58)
+            setPaddingRelative(dp(2), dp(7), dp(2), dp(7))
+            compoundDrawablePadding = dp(4)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(null, uiGlyph(glyph), null, null)
+            setOnClickListener { open() }
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            marginStart = dp(3)
+            marginEnd = dp(3)
+        })
+    }
+
+    private fun trafficTile(label: Int, amount: TextView): View = uiCard(13).apply {
+        uiAdd(uiCaption(label))
+        uiAdd(amount, 4)
+    }
+
+    private fun renderTraffic() {
+        val traffic = VpnTrafficUi.latest.takeIf { VpnConnection.phase == VpnPhase.HANDSHAKE }
+        val receiveText = traffic?.let { Formatter.formatShortFileSize(this, it.received) }
+            ?: getString(R.string.ui_traffic_unavailable)
+        val sendText = traffic?.let { Formatter.formatShortFileSize(this, it.sent) }
+            ?: getString(R.string.ui_traffic_unavailable)
+        if (received.text != receiveText) received.text = receiveText
+        if (sent.text != sendText) sent.text = sendText
     }
 
     private fun selectConfig() {
@@ -441,6 +559,22 @@ class MainActivity : ComponentActivity() {
             else -> R.string.connect_vpn
         })
         connectionStatus.setText(if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message)
+        val color = when {
+            VpnConnection.currentError != null -> R.color.ui_error
+            phase == VpnPhase.HANDSHAKE -> R.color.ui_good
+            else -> R.color.ui_accent
+        }
+        if (statusColor != color) {
+            statusColor = color
+            connectionStatus.setTextColor(getColor(color))
+            val surface = when (color) {
+                R.color.ui_good -> R.color.ui_good_surface
+                R.color.ui_error -> R.color.ui_error_surface
+                else -> R.color.ui_accent_soft
+            }
+            connectionStatus.background = uiShape(surface, 20)
+        }
+        renderTraffic()
         connectionDiagnostics.text = getString(
             R.string.vpn_diagnostic_summary,
             VpnConnection.eventNumber,
@@ -457,6 +591,7 @@ class MainActivity : ComponentActivity() {
     private fun editCountry() {
         val profile = session.profile ?: return
         val input = EditText(this).apply {
+            uiField()
             setSingleLine(true)
             filters = arrayOf(InputFilter.LengthFilter(VpnProfileLabels.MAX_LENGTH))
             setText(labels.country(profile.documentKey))

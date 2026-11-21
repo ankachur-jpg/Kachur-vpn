@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Looper
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ListView
@@ -42,20 +43,20 @@ class IpRoutesActivityTest {
             awaitFeedback(recreated, recreated.getString(R.string.ip_import_success, 2))
 
             input(recreated).setText("203.0.113.17/24")
-            recreated.findViewById<Button>(R.id.ip_add_button).performClick()
+            controls(recreated).findViewById<Button>(R.id.ip_add_button).performClick()
             val list = recreated.findViewById<ListView>(R.id.ip_list)
-            assertEquals(3, list.adapter.count)
-            recreated.findViewById<EditText>(R.id.ip_search).setText("198.51")
-            assertEquals(1, list.adapter.count)
-            val row = list.adapter.getView(0, null, list)
+            assertEquals(3, list.adapter.count - list.headerViewsCount)
+            controls(recreated).findViewById<EditText>(R.id.ip_search).setText("198.51")
+            assertEquals(1, list.adapter.count - list.headerViewsCount)
+            val row = list.adapter.getView(list.headerViewsCount, null, list)
             row.findViewById<Button>(R.id.ip_remove_button).performClick()
-            assertEquals(0, list.adapter.count)
+            assertEquals(0, list.adapter.count - list.headerViewsCount)
             assertEquals(setOf("192.0.2.0/24", "203.0.113.0/24"), settings.ipRoutes())
         }
         Robolectric.buildActivity(IpRoutesActivity::class.java).setup().use { reopened ->
             val activity = reopened.get()
             val list = activity.findViewById<ListView>(R.id.ip_list)
-            assertEquals(2, list.adapter.count)
+            assertEquals(2, list.adapter.count - list.headerViewsCount)
             assertEquals(setOf("com.example.direct"), SplitTunnelingSettings(activity).excludedPackages())
         }
     }
@@ -77,17 +78,22 @@ class IpRoutesActivityTest {
             awaitFeedback(activity, activity.getString(R.string.ip_import_entry, 2))
             assertFalse(feedback(activity).text.contains("synthetic-sensitive-value"))
             assertEquals(setOf("192.0.2.0/24"), settings.ipRoutes())
-            assertTrue(activity.findViewById<Button>(R.id.ip_import_button).isEnabled)
+            assertTrue(controls(activity).findViewById<Button>(R.id.ip_import_button).isEnabled)
         }
     }
 
     private fun launchPicker(activity: IpRoutesActivity) = shadowOf(activity).run {
-        activity.findViewById<Button>(R.id.ip_import_button).performClick()
+        controls(activity).findViewById<Button>(R.id.ip_import_button).performClick()
         nextStartedActivityForResult
     }
 
-    private fun input(activity: IpRoutesActivity) = activity.findViewById<EditText>(R.id.ip_input)
-    private fun feedback(activity: IpRoutesActivity) = activity.findViewById<TextView>(R.id.ip_import_feedback)
+    private fun controls(activity: IpRoutesActivity): View {
+        val list = activity.findViewById<ListView>(R.id.ip_list)
+        return list.adapter.getView(0, null, list)
+    }
+
+    private fun input(activity: IpRoutesActivity) = controls(activity).findViewById<EditText>(R.id.ip_input)
+    private fun feedback(activity: IpRoutesActivity) = controls(activity).findViewById<TextView>(R.id.ip_import_feedback)
 
     private fun awaitFeedback(activity: IpRoutesActivity, expected: String) {
         val main = shadowOf(Looper.getMainLooper())

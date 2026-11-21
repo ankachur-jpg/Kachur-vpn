@@ -15,9 +15,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -25,7 +23,7 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import javax.crypto.AEADBadTagException
 
-class BackupActivity : ComponentActivity() {
+class BackupActivity : KachurActivity() {
     private val session by lazy { ViewModelProvider(this)[BackupSession::class.java] }
     private lateinit var export: Button
     private lateinit var restore: Button
@@ -48,44 +46,37 @@ class BackupActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            val padding = (20 * resources.displayMetrics.density).toInt()
-            setPadding(padding, padding, padding, padding)
-        }
-        layout.addView(Button(this).apply { setText(R.string.split_back); setOnClickListener { finish() } })
-        layout.addView(TextView(this).apply { setText(R.string.backup_title); textSize = 24f })
-        layout.addView(TextView(this).apply { setText(R.string.backup_description) })
-        export = Button(this).apply {
-            id = R.id.backup_export
-            setText(R.string.backup_export)
-            setOnClickListener { askPassword(true) { session.prepareExport(applicationContext, it) } }
-        }
-        restore = Button(this).apply {
-            id = R.id.backup_open
-            setText(R.string.backup_open)
-            setOnClickListener {
-                try { openDocument.launch(arrayOf("*/*")) } catch (_: RuntimeException) { session.status(R.string.backup_file_error) }
+        val layout = uiColumn(18)
+        layout.uiAdd(uiHeader(R.string.backup_title) { finish() })
+        layout.uiAdd(uiCard().apply {
+            uiAdd(uiCaption(R.string.backup_description))
+            export = uiButton(R.string.backup_export, primary = true).apply {
+                id = R.id.backup_export
+                setOnClickListener { askPassword(true) { session.prepareExport(applicationContext, it) } }
             }
-        }
-        status = TextView(this).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-        preview = TextView(this).apply { id = R.id.backup_preview }
-        confirm = Button(this).apply {
-            id = R.id.backup_confirm
-            setText(R.string.backup_confirm)
-            setOnClickListener { if (VpnConnection.phase == VpnPhase.IDLE) session.applyRestore(applicationContext) }
-        }
-        discard = Button(this).apply { setText(android.R.string.cancel); setOnClickListener { session.discard() } }
-        for (control in listOf(export, restore, status, preview, confirm, discard)) layout.addView(control)
-        setContentView(ScrollView(this).apply {
-            addView(layout)
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
-                insets
+            restore = uiButton(R.string.backup_open).apply {
+                id = R.id.backup_open
+                setOnClickListener {
+                    try { openDocument.launch(arrayOf("*/*")) } catch (_: RuntimeException) { session.status(R.string.backup_file_error) }
+                }
             }
-        })
+            uiAdd(export, 14)
+            uiAdd(restore, 8)
+        }, 16)
+        layout.uiAdd(uiCard().apply {
+            status = uiLabel(16).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+            preview = uiLabel(16).apply { id = R.id.backup_preview }
+            confirm = uiButton(R.string.backup_confirm, primary = true).apply {
+                id = R.id.backup_confirm
+                setOnClickListener { if (VpnConnection.phase == VpnPhase.IDLE) session.applyRestore(applicationContext) }
+            }
+            discard = uiButton(android.R.string.cancel).apply { setOnClickListener { session.discard() } }
+            uiAdd(status)
+            uiAdd(preview, 8)
+            uiAdd(confirm, 10)
+            uiAdd(discard, 8)
+        }, 14)
+        setContentView(uiScroll(layout).apply { uiInsets() })
         render()
     }
 
@@ -128,6 +119,7 @@ class BackupActivity : ComponentActivity() {
 
     private fun askPassword(creating: Boolean, action: (CharArray) -> Unit) {
         fun field(hint: Int) = EditText(this).apply {
+            uiField()
             setHint(hint)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING

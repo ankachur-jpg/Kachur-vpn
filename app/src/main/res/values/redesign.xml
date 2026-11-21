@@ -1,0 +1,29 @@
+<resources>
+    <string name="ui_settings">Настройки</string>
+    <string name="ui_servers">Серверы</string>
+    <string name="ui_diagnostics">Диагностика</string>
+    <string name="ui_connection">Подключение</string>
+    <string name="ui_selected_server">Выбранный сервер</string>
+    <string name="ui_traffic">Трафик сеанса</string>
+    <string name="ui_received">Получено</string>
+    <string name="ui_sent">Отправлено</string>
+    <string name="ui_traffic_unavailable">Нет данных</string>
+    <string name="ui_details">Подробности подключения</string>
+    <string name="ui_hide_details">Скрыть подробности</string>
+    <string name="ui_appearance">Оформление</string>
+    <string name="ui_theme">Тема</string>
+    <string name="ui_theme_value">Тема · %1$s</string>
+    <string name="ui_theme_system">Как в системе</string>
+    <string name="ui_theme_light">Светлая</string>
+    <string name="ui_theme_dark">Тёмная</string>
+    <string name="ui_routing_and_backup">Маршруты и данные</string>
+    <string name="ui_profile_action">%1$s · %2$s</string>
+    <string name="ui_ping_legend">Максимум %1$s\nФиолетовый — напрямую. Бирюзовый — через VPN.</string>
+    <item type="id" name="ui_open_settings" />
+    <item type="id" name="ui_settings_page" />
+    <item type="id" name="ui_theme_choice" />
+    <item type="id" name="ui_open_ip_routes" />
+    <item type="id" name="ui_connection_details" />
+    <item type="id" name="ui_traffic_received" />
+    <item type="id" name="ui_traffic_sent" />
+</resources>

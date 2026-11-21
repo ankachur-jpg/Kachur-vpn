@@ -1,0 +1,13 @@
+<resources>
+    <style name="Theme.Kachur" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ui_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">@bool/ui_light_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/ui_light_bars</item>
+        <item name="android:colorAccent">@color/ui_accent</item>
+        <item name="android:textColorPrimary">@color/ui_text</item>
+        <item name="android:textColorSecondary">@color/ui_muted</item>
+        <item name="android:fontFamily">sans-serif</item>
+    </style>
+</resources>

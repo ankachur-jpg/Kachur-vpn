@@ -38,6 +38,7 @@ import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowActivity
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowVpnService
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -417,7 +418,6 @@ class ConfigImportActivityTest {
     }
 
     @Test
-    @Config(shadows = [VpnConsentShadow::class])
     fun displaysSafeParserFailureAfterTheServiceStops() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
@@ -425,10 +425,11 @@ class ConfigImportActivityTest {
             registerDocument(activity, validConfig().replace("Jc = 4", "Jc = $invalidValue"))
             deliverDocument(activity)
             awaitFeedback(activity, R.string.profile_imported)
-            VpnConsentShadow.granted = true
+            ShadowVpnService.setPrepareResult(null)
             try {
                 val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
                 assertTrue(connect.performClick())
+                awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_requesting_service))
                 awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
                 val serviceIntent = shadowOf(activity).nextStartedService
                 val service = Robolectric.buildService(AwgVpnService::class.java, serviceIntent).create()
@@ -451,7 +452,7 @@ class ConfigImportActivityTest {
                 assertFalse(diagnostics.contains(invalidValue))
                 assertTrue(connect.isEnabled)
             } finally {
-                VpnConsentShadow.granted = false
+                ShadowVpnService.reset()
                 VpnConnection.reset()
             }
         }

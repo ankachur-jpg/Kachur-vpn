@@ -53,20 +53,41 @@ class ConfigImportActivityTest {
             val rotated = controller.get()
             assertEquals(rotated.getString(R.string.unnamed_profile), text(rotated, R.id.profile_name))
             assertEquals(rotated.getString(R.string.profile_imported), text(rotated, R.id.import_feedback))
+            assertStages(
+                rotated, R.string.import_picker_opening, R.string.import_result_received,
+                R.string.import_document_opening, R.string.import_document_reading,
+                R.string.import_config_parsing, R.string.import_profile_naming,
+                R.string.import_profile_default_name, R.string.import_profile_displayed,
+            )
         }
     }
 
     @Test
-    fun showsMissingResultAndLeavesCancellationQuiet() {
+    fun showsCancellationAndMissingPickerResult() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             val request = launchPicker(activity)
             assertTrue(activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_CANCELED, null))
-            assertEquals(View.GONE, activity.findViewById<TextView>(R.id.import_feedback).visibility)
+            assertEquals(activity.getString(R.string.import_cancelled), text(activity, R.id.import_feedback))
+            assertStages(activity, R.string.import_picker_opening, R.string.import_result_received)
+            assertTrue(activity.findViewById<Button>(R.id.import_profile_button).isEnabled)
 
             val next = launchPicker(activity)
             assertTrue(activity.activityResultRegistry.dispatchResult(next.requestCode, Activity.RESULT_OK, null))
             assertEquals(activity.getString(R.string.no_document_returned), text(activity, R.id.import_feedback))
+        }
+    }
+
+    @Test
+    fun allowsRetryWhenActivityResumesWithoutPickerCallback() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            launchPicker(activity)
+            controller.pause().resume().postResume()
+
+            assertEquals(activity.getString(R.string.picker_no_callback), text(activity, R.id.import_feedback))
+            assertStages(activity, R.string.import_picker_opening)
+            assertTrue(activity.findViewById<Button>(R.id.import_profile_button).isEnabled)
         }
     }
 
@@ -85,14 +106,50 @@ class ConfigImportActivityTest {
             deliverDocument(activity)
             awaitFeedback(activity, R.string.invalid_config_line, 3)
             assertFalse(text(activity, R.id.import_feedback).contains(invalidValue))
+            assertFalse(text(activity, R.id.import_diagnostics).contains(invalidValue))
+            assertStages(
+                activity, R.string.import_picker_opening, R.string.import_result_received,
+                R.string.import_document_opening, R.string.import_document_reading, R.string.import_config_parsing,
+            )
             assertEquals("Test profile", text(activity, R.id.profile_name))
 
             registerDocument(activity, validConfig(), openFails = true)
             deliverDocument(activity)
-            awaitFeedback(activity, R.string.cannot_read_config)
+            awaitFeedback(activity, R.string.cannot_open_config)
+            assertStages(
+                activity, R.string.import_picker_opening, R.string.import_result_received,
+                R.string.import_document_opening,
+            )
             assertEquals("Test profile", text(activity, R.id.profile_name))
             assertTrue(activity.findViewById<Button>(R.id.import_profile_button).isEnabled)
         }
+    }
+
+    @Test
+    fun distinguishesUnreadableTextFromMissingConfigSections() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, "", bytes = byteArrayOf(0xC3.toByte(), 0x28))
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.invalid_config_encoding)
+            assertStages(
+                activity, R.string.import_picker_opening, R.string.import_result_received,
+                R.string.import_document_opening, R.string.import_document_reading,
+            )
+
+            registerDocument(activity, "# Empty export")
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.config_missing_interface)
+            assertStages(
+                activity, R.string.import_picker_opening, R.string.import_result_received,
+                R.string.import_document_opening, R.string.import_document_reading, R.string.import_config_parsing,
+            )
+            assertEquals(activity.getString(R.string.no_profile), text(activity, R.id.profile_name))
+        }
+    }
+
+    private fun assertStages(activity: MainActivity, vararg stages: Int) {
+        assertEquals(stages.joinToString("\n") { activity.getString(it) }, text(activity, R.id.import_diagnostics))
     }
 
     private fun deliverDocument(activity: MainActivity) {
@@ -128,8 +185,9 @@ class ConfigImportActivityTest {
         displayName: String = "Test profile.conf",
         metadataFails: Boolean = false,
         openFails: Boolean = false,
+        bytes: ByteArray = content.toByteArray(),
     ) {
-        val fixture = File.createTempFile("import-test-", ".conf", activity.cacheDir).apply { writeText(content) }
+        val fixture = File.createTempFile("import-test-", ".conf", activity.cacheDir).apply { writeBytes(bytes) }
         val provider = object : ContentProvider() {
             override fun onCreate() = true
             override fun getType(uri: Uri) = "application/octet-stream"

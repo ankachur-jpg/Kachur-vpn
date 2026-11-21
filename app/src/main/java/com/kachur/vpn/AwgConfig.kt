@@ -20,7 +20,12 @@ internal class ConfigSection(private val fields: Map<String, String>) {
 internal class ConfigFormatException(
     val line: Int? = null,
     val unsupportedOption: Boolean = false,
+    val problem: ConfigProblem? = null,
 ) : Exception("Invalid VPN configuration")
+
+internal enum class ConfigProblem {
+    TOO_LARGE, MISSING_INTERFACE, MISSING_PEER, MISSING_PRIVATE_KEY, MISSING_PUBLIC_KEY,
+}
 
 internal object AwgConfigParser {
     internal const val MAX_CHARS = 256 * 1024
@@ -41,7 +46,9 @@ internal object AwgConfigParser {
         "maxhandshakeattempts", "contentpaddingaddition",
     )
 
-    fun parse(input: InputStream): AwgConfig {
+    fun parse(input: InputStream): AwgConfig = parse(read(input))
+
+    fun read(input: InputStream): CharSequence {
         val decoder = Charsets.UTF_8.newDecoder()
             .onMalformedInput(CodingErrorAction.REPORT)
             .onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -51,10 +58,16 @@ internal object AwgConfigParser {
         while (true) {
             val count = reader.read(buffer)
             if (count == -1) break
-            if (source.length + count > MAX_CHARS) throw ConfigFormatException()
+            if (source.length + count > MAX_CHARS) {
+                throw ConfigFormatException(problem = ConfigProblem.TOO_LARGE)
+            }
             source.append(buffer, 0, count)
         }
 
+        return source
+    }
+
+    fun parse(source: CharSequence): AwgConfig {
         var device: SectionBuilder? = null
         var current: SectionBuilder? = null
         val peers = mutableListOf<SectionBuilder>()
@@ -93,13 +106,13 @@ internal object AwgConfigParser {
             }
         }
 
-        val interfaceSection = device ?: throw ConfigFormatException()
+        val interfaceSection = device ?: throw ConfigFormatException(problem = ConfigProblem.MISSING_INTERFACE)
         val interfaceFields = interfaceSection.fields()
         validateInterface(interfaceSection, interfaceFields)
-        if (peers.isEmpty()) throw ConfigFormatException()
+        if (peers.isEmpty()) throw ConfigFormatException(problem = ConfigProblem.MISSING_PEER)
         val publicKeys = mutableSetOf<String>()
         for (peer in peers) {
-            val publicKey = peer.values["publickey"]?.toString() ?: throw ConfigFormatException(peer.startLine)
+            val publicKey = peer.values["publickey"]?.toString() ?: throw ConfigFormatException(peer.startLine, problem = ConfigProblem.MISSING_PUBLIC_KEY)
             if (!publicKeys.add(publicKey)) throw ConfigFormatException(peer.lines["publickey"])
         }
         return AwgConfig(
@@ -145,7 +158,9 @@ internal object AwgConfigParser {
     }
 
     private fun validateInterface(section: SectionBuilder, values: Map<String, String>) {
-        if ("privatekey" !in values) throw ConfigFormatException(section.startLine)
+        if ("privatekey" !in values) {
+            throw ConfigFormatException(section.startLine, problem = ConfigProblem.MISSING_PRIVATE_KEY)
+        }
         if ("includedapplications" in values && "excludedapplications" in values) {
             val includedLine = section.lines.getValue("includedapplications")
             val excludedLine = section.lines.getValue("excludedapplications")

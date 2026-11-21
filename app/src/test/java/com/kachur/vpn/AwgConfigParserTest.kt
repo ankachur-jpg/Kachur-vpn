@@ -14,6 +14,23 @@ class AwgConfigParserTest {
     private val dummyHeader = dummyKey(2)
 
     @Test
+    fun reportsTheReasonForMissingSectionsKeysAndOversizedInput() {
+        fun assertProblem(problem: ConfigProblem, content: String, line: Int? = null) {
+            val error = assertThrows(ConfigFormatException::class.java) { parse(content) }
+            assertEquals(problem, error.problem)
+            assertEquals(line, error.line)
+        }
+
+        assertProblem(ConfigProblem.MISSING_INTERFACE, "# Empty export")
+        assertProblem(ConfigProblem.MISSING_PRIVATE_KEY, "[Interface]", 1)
+        assertProblem(ConfigProblem.MISSING_PEER, "[Interface]\nPrivateKey = ${dummyPrivate}")
+        assertProblem(
+            ConfigProblem.MISSING_PUBLIC_KEY, "[Interface]\nPrivateKey = ${dummyPrivate}\n[Peer]", 3,
+        )
+        assertProblem(ConfigProblem.TOO_LARGE, " ".repeat(AwgConfigParser.MAX_CHARS + 1))
+    }
+
+    @Test
     fun importsMultiplePeersAndAwgOptions() {
         val config = parse(
             "\uFEFF" + example(

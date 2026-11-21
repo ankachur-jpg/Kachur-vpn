@@ -45,6 +45,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
     private val vpnObserver: () -> Unit = ::renderConnection
+    private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
+    private val downloadsObserver by lazy { splitSettings.onDownloadsChanged(::renderConnection) }
     private val main = Handler(Looper.getMainLooper())
     private var resumed = false
     private var permissionRequest: PermissionRequest? = null
@@ -220,11 +222,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        splitSettings.preferences.registerOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.observe(vpnObserver)
         render()
     }
 
     override fun onStop() {
+        splitSettings.preferences.unregisterOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.removeObserver(vpnObserver)
         super.onStop()
     }

@@ -36,6 +36,7 @@ class IpRoutesActivity : ComponentActivity() {
     private val settings by lazy { SplitTunnelingSettings(applicationContext) }
     private val session by lazy { ViewModelProvider(this)[IpImportSession::class.java] }
     private val vpnObserver: () -> Unit = ::renderVpn
+    private val downloadsObserver by lazy { settings.onDownloadsChanged(::renderVpn) }
     private lateinit var importButton: Button
     private lateinit var feedback: TextView
     private lateinit var search: EditText
@@ -95,6 +96,11 @@ class IpRoutesActivity : ComponentActivity() {
             })
         })
         root.addView(TextView(this).apply { setText(R.string.ip_description) })
+        root.addView(Button(this).apply {
+            id = R.id.ip_open_sources
+            setText(R.string.ip_update_title)
+            setOnClickListener { startActivity(Intent(this@IpRoutesActivity, IpSourcesActivity::class.java)) }
+        })
         importButton = Button(this).apply {
             id = R.id.ip_import_button
             setText(R.string.ip_import)
@@ -159,11 +165,13 @@ class IpRoutesActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         session.onChange = ::render
+        settings.preferences.registerOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.observe(vpnObserver)
         render()
     }
 
     override fun onStop() {
+        settings.preferences.unregisterOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.removeObserver(vpnObserver)
         session.onChange = null
         super.onStop()
@@ -214,7 +222,7 @@ class IpRoutesActivity : ComponentActivity() {
     }
 
     private fun render() {
-        savedRoutes = settings.ipRoutes().sorted()
+        savedRoutes = settings.manualIpRoutes().sorted()
         importButton.isEnabled = !session.loading
         feedback.text = session.feedback?.let { (message, value) ->
             if (value == null) getString(message) else getString(message, value)

@@ -26,4 +26,10 @@
     <item type="id" name="ip_remove_button" />
     <item type="id" name="ip_list" />
     <item type="id" name="ip_reconnect_button" />
+    <item type="id" name="ip_open_sources" />
+    <item type="id" name="ip_update_registry" />
+    <item type="id" name="ip_update_schedule" />
+    <item type="id" name="ip_update_add" />
+    <item type="id" name="ip_update_now" />
+    <item type="id" name="ip_update_status" />
 </resources>

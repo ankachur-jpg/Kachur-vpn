@@ -34,6 +34,7 @@ class SplitTunnelingActivity : Activity() {
     private val loader = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val vpnObserver: () -> Unit = ::renderReconnect
+    private val downloadsObserver by lazy { settings.onDownloadsChanged(::renderReconnect) }
     private lateinit var search: EditText
     private lateinit var categories: Spinner
     private lateinit var reconnect: Button
@@ -138,6 +139,7 @@ class SplitTunnelingActivity : Activity() {
 
     override fun onStart() {
         super.onStart()
+        settings.preferences.registerOnSharedPreferenceChangeListener(downloadsObserver)
         selection = settings.excludedPackages()
         VpnConnection.observe(vpnObserver)
         renderApps()
@@ -159,6 +161,7 @@ class SplitTunnelingActivity : Activity() {
     }
 
     override fun onStop() {
+        settings.preferences.unregisterOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.removeObserver(vpnObserver)
         super.onStop()
     }

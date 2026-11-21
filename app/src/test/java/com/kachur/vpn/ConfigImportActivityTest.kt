@@ -644,6 +644,36 @@ class ConfigImportActivityTest {
         }
     }
 
+    @Test
+    fun downloadingRoutesLeavesTheActiveVpnRunningWithItsExistingSnapshot() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val context = activity.applicationContext
+            val feeds = IpUpdateSettings(context)
+            val source = checkNotNull(IpUpdateSource.custom("https://a.example.test/update.json"))
+            feeds.change(false, listOf(source), IpUpdateSchedule.MANUAL)
+            VpnConnection.start(context, AwgConfigParser.parse(validConfig() + "\nAllowedIPs = 0.0.0.0/0"))
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val id = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            var stops = 0
+            try {
+                val original = checkNotNull(VpnConnection.claim(id) { stops++ })
+                VpnConnection.tunnelReady(id)
+                VpnConnection.handshake(id)
+                val update = IpFeedUpdater(context, { setOf("192.0.2.0/24") })
+                assertEquals(IpUpdateResult.SUCCESS, update.refresh())
+                assertEquals(VpnPhase.HANDSHAKE, VpnConnection.phase)
+                assertEquals(0, stops)
+                assertTrue(original.routing.ipRoutes.isEmpty())
+                assertEquals(View.VISIBLE, activity.findViewById<Button>(R.id.main_split_reconnect_button).visibility)
+                assertNull(shadowOf(activity).nextStartedService)
+            } finally {
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(id, cleanupFailed = false)
+            }
+        }
+    }
+
     private fun requestVpnPermission(activity: MainActivity): ShadowActivity.IntentForResult {
         assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).performClick())
         awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))

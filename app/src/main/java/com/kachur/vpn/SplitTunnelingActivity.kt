@@ -2,6 +2,7 @@ package com.kachur.vpn
 
 import android.app.Activity
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -11,6 +12,7 @@ import android.text.TextUtils.TruncateAt
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -48,9 +50,15 @@ class SplitTunnelingActivity : Activity() {
             setBackgroundColor(Color.rgb(18, 24, 35))
             setOnApplyWindowInsetsListener { view, insets ->
                 @Suppress("DEPRECATION")
+                val bottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime()).bottom
+                } else {
+                    insets.systemWindowInsetBottom
+                }
+                @Suppress("DEPRECATION")
                 view.setPadding(
                     insets.systemWindowInsetLeft + dp(16), insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight + dp(16), insets.systemWindowInsetBottom,
+                    insets.systemWindowInsetRight + dp(16), bottom,
                 )
                 insets
             }
@@ -204,7 +212,11 @@ class SplitTunnelingActivity : Activity() {
             maxLines = 1
             ellipsize = TruncateAt.END
         }
-        val toggle = Switch(context).apply { id = R.id.split_app_switch }
+        val toggle = Switch(context).apply {
+            id = R.id.split_app_switch
+            minimumWidth = dp(48)
+            minimumHeight = dp(48)
+        }
 
         init {
             orientation = HORIZONTAL

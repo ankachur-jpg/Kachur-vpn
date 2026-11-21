@@ -449,3 +449,29 @@
  	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
  	int ret = awgTurnOn((struct go_string){
  		.str = ifname_str,
+--- a/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
++++ b/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
+@@ -17,6 +17,7 @@
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.LinkedHashSet;
++import java.util.Arrays;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Objects;
+@@ -887,12 +888,13 @@
+             }
+         }
+ 
++        // Modified by Kachur VPN to keep per-app routing compatible with Android API 26–29.
+         public Builder parseExcludedApplications(final CharSequence apps) {
+-            return excludeApplications(List.of(Attribute.split(apps)));
++            return excludeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseIncludedApplications(final CharSequence apps) {
+-            return includeApplications(List.of(Attribute.split(apps)));
++            return includeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseListenPort(final String listenPort) throws BadConfigException {

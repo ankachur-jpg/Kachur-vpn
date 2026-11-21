@@ -183,6 +183,7 @@ class AwgBackendConfigTest {
     }
 
     @Test
+    @Config(sdk = [28, 34])
     fun appExclusionsReachTheGoBackendConfigAndPreserveImportedRules() {
         val imported = profile(
             "ExcludedApplications = com.example.fromprofile, com.example.overlap",
@@ -206,6 +207,7 @@ class AwgBackendConfigTest {
     }
 
     @Test
+    @Config(sdk = [28, 34])
     fun appExclusionsNarrowAnAllowlistWithoutOpeningTheTunnelToOtherApps() {
         val imported = profile("IncludedApplications = com.example.first, com.example.second")
         val applied = imported.toBackendConfig(setOf("com.example.first", "com.example.outside"))

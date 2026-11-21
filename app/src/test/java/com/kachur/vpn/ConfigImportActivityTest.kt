@@ -2,13 +2,17 @@ package com.kachur.vpn
 
 import android.app.Activity
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ContentProvider
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.net.VpnService
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
@@ -17,8 +21,12 @@ import android.widget.Button
 import android.widget.TextView
 import java.io.File
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -26,8 +34,11 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowActivity
 import org.robolectric.shadows.ShadowContentResolver
+import org.robolectric.shadows.ShadowVpnService
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -149,11 +160,10 @@ class ConfigImportActivityTest {
     }
 
     @Test
-    fun connectionButtonExplainsMissingProfileAndUnavailableEngine() {
+    fun connectionButtonRequiresProfileAndStatusFollowsService() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
-            assertEquals(activity.getString(R.string.vpn_disconnected), text(activity, R.id.connection_status))
             assertTrue(connect.performClick())
             assertEquals(activity.getString(R.string.vpn_profile_required), text(activity, R.id.connection_status))
 
@@ -161,16 +171,333 @@ class ConfigImportActivityTest {
             deliverDocument(activity)
             awaitFeedback(activity, R.string.profile_imported)
             val diagnostics = text(activity, R.id.import_diagnostics)
-            assertEquals(activity.getString(R.string.vpn_disconnected), text(activity, R.id.connection_status))
-            assertTrue(connect.performClick())
-            assertEquals(activity.getString(R.string.engine_unavailable), text(activity, R.id.connection_status))
-            assertEquals(activity.getString(R.string.profile_imported), text(activity, R.id.import_feedback))
-            assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
-            assertEquals(null, shadowOf(activity).nextStartedActivityForResult)
+            try {
+                VpnConnection.publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+                assertEquals(activity.getString(R.string.vpn_waiting_handshake), text(activity, R.id.connection_status))
+                assertEquals(activity.getString(R.string.vpn_disconnect), connect.text.toString())
+                assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
 
+                controller.recreate()
+                val recreated = controller.get()
+                assertEquals(recreated.getString(R.string.vpn_waiting_handshake), text(recreated, R.id.connection_status))
+                VpnConnection.publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
+                assertEquals(recreated.getString(R.string.vpn_handshake_received), text(recreated, R.id.connection_status))
+            } finally {
+                VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected)
+            }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun deniedSystemConsentDoesNotStartVpn() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+            val consent = requestVpnPermission(activity)
+            assertEquals(VpnConsentShadow.ACTION, consent.intent.action)
+            assertEquals(activity.getString(R.string.vpn_waiting_permission), text(activity, R.id.connection_status))
+            assertFalse(connect.isEnabled)
+
+            assertTrue(activity.activityResultRegistry.dispatchResult(consent.requestCode, Activity.RESULT_CANCELED, null))
+            assertEquals(activity.getString(R.string.vpn_permission_denied), text(activity, R.id.connection_status))
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            assertTrue(connect.isEnabled)
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun grantedResultWaitsForResumeAndAllowsRetryIfServiceNeverStarts() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+            try {
+                val consent = requestVpnPermission(activity)
+                controller.pause()
+                VpnConsentShadow.granted = true
+                assertTrue(activity.activityResultRegistry.dispatchResult(consent.requestCode, Activity.RESULT_OK, null))
+                assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+
+                controller.resume().postResume()
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                assertEquals(VpnPhase.STARTING, VpnConnection.phase)
+                assertEquals(activity.getString(R.string.vpn_cancel_start), connect.text.toString())
+                assertTrue(connect.isEnabled)
+                assertTrue(text(activity, R.id.connection_diagnostics).contains("permissionPending · false"))
+                awaitDiagnostic(activity, R.string.vpn_service_awaiting_reply)
+
+                shadowOf(Looper.getMainLooper()).idleFor(VpnConnection.STARTUP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                assertEquals(activity.getString(R.string.vpn_service_timeout), text(activity, R.id.connection_status))
+                assertEquals(activity.getString(R.string.connect_vpn), connect.text.toString())
+                assertTrue(connect.isEnabled)
+                awaitDiagnostic(activity, R.string.vpn_service_no_reply)
+                resetButton(activity).performClick()
+                awaitDiagnostic(activity, R.string.vpn_service_timeout)
+                assertEquals(activity.getString(R.string.profile_imported), text(activity, R.id.import_feedback))
+            } finally {
+                VpnConsentShadow.granted = false
+                VpnConnection.reset()
+            }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun allowsRetryAfterReopeningWithAnUnansweredPermissionRequest() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+
+            val consent = requestVpnPermission(activity)
+            assertEquals(VpnConsentShadow.ACTION, consent.intent.action)
             controller.recreate()
-            val recreated = controller.get()
-            assertEquals(recreated.getString(R.string.engine_unavailable), text(recreated, R.id.connection_status))
+            val reopened = controller.get()
+            awaitDiagnostic(reopened, R.string.vpn_permission_no_result)
+            assertEquals(reopened.getString(R.string.vpn_permission_no_result), text(reopened, R.id.connection_status))
+            assertTrue(reopened.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+        }
+    }
+
+    @Test
+    fun reopenedActivityKeepsReceivingUpdatesWhenPreviousActivityStops() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { first ->
+            Robolectric.buildActivity(MainActivity::class.java).setup().use { second ->
+                first.pause().stop()
+                val reopened = second.get()
+                try {
+                    VpnConnection.publish(VpnPhase.STARTING, R.string.vpn_service_started)
+                    assertEquals(reopened.getString(R.string.vpn_service_started), text(reopened, R.id.connection_status))
+                    VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_start_error)
+                    assertEquals(reopened.getString(R.string.vpn_start_error), text(reopened, R.id.connection_status))
+                    assertTrue(reopened.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+                } finally {
+                    VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun serviceLaunchRejectionReturnsToIdleAndDropsPendingProfile() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val rejectingContext = object : ContextWrapper(activity.applicationContext) {
+                override fun startForegroundService(service: Intent): ComponentName {
+                    assertEquals(AwgVpnService::class.java.name, service.component?.className)
+                    assertEquals(setOf(VpnConnection.EXTRA_ATTEMPT), service.extras?.keySet())
+                    throw SecurityException("synthetic system error")
+                }
+            }
+            VpnConnection.start(rejectingContext, AwgConfigParser.parse(validConfig()))
+            awaitDiagnostic(activity, R.string.vpn_service_rejected)
+            assertFalse(text(activity, R.id.connection_diagnostics).contains("synthetic system error"))
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            assertEquals(activity.getString(R.string.vpn_service_rejected), text(activity, R.id.connection_status))
+            assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun diagnosticsAndResetRemainUsableWhileAndroidPermissionCheckDoesNotReturn() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val panel = activity.findViewById<TextView>(R.id.connection_diagnostics)
+            assertEquals(View.VISIBLE, panel.visibility)
+            assertTrue(panel.text.contains("Событие № %d".format(VpnConnection.eventNumber)))
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            val before = VpnConnection.eventNumber
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            VpnConsentShadow.prepareEntered = entered
+            VpnConsentShadow.prepareRelease = release
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+            try {
+                assertTrue(connect.performClick())
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                assertEquals(View.VISIBLE, panel.visibility)
+                assertTrue(panel.text.contains("permissionPending · false"))
+                assertTrue(panel.text.contains(activity.getString(R.string.vpn_blocked_permission_check)))
+                assertTrue(VpnConnection.eventNumber > before)
+                assertFalse(connect.isEnabled)
+
+                assertTrue(resetButton(activity).performClick())
+                assertEquals(activity.getString(R.string.vpn_reset_done), text(activity, R.id.connection_status))
+                assertTrue(panel.text.contains(activity.getString(R.string.vpn_button_available)))
+                assertTrue(connect.isEnabled)
+                assertEquals("Test profile", text(activity, R.id.profile_name))
+                assertEquals(activity.getString(R.string.profile_imported), text(activity, R.id.import_feedback))
+            } finally {
+                release.countDown()
+                VpnConsentShadow.prepareEntered = null
+                VpnConsentShadow.prepareRelease = null
+            }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun resettingPendingDialogPreventsItsLateActivityResultFromConsumingRetry() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+
+            val cancelled = requestVpnPermission(activity)
+            assertTrue(text(activity, R.id.connection_diagnostics).contains("permissionPending · true"))
+            awaitDiagnostic(activity, R.string.vpn_blocked_permission_result)
+            assertFalse(connect.isEnabled)
+            assertTrue(resetButton(activity).performClick())
+            assertTrue(connect.isEnabled)
+            assertEquals("Test profile", text(activity, R.id.profile_name))
+
+            val retry = requestVpnPermission(activity)
+            assertTrue(cancelled.requestCode != retry.requestCode)
+            activity.activityResultRegistry.dispatchResult(cancelled.requestCode, Activity.RESULT_CANCELED, null)
+            assertEquals(activity.getString(R.string.vpn_waiting_permission), text(activity, R.id.connection_status))
+            assertFalse(connect.isEnabled)
+
+            assertTrue(activity.activityResultRegistry.dispatchResult(retry.requestCode, Activity.RESULT_CANCELED, null))
+            assertTrue(connect.isEnabled)
+            awaitDiagnostic(activity, R.string.vpn_permission_denied)
+        }
+    }
+
+    @Test
+    fun resetOfClaimedServiceWaitsForCleanupAndIgnoresLateStartup() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            val launchId = AtomicReference<Long>()
+            val capturingContext = object : ContextWrapper(activity.applicationContext) {
+                override fun startForegroundService(service: Intent): ComponentName {
+                    launchId.set(service.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L))
+                    return checkNotNull(service.component)
+                }
+            }
+            val config = AwgConfigParser.parse(validConfig())
+            VpnConnection.start(capturingContext, config)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val id = checkNotNull(launchId.get())
+            var cancellations = 0
+            assertTrue(VpnConnection.claim(id) { cancellations++ } === config)
+            VpnConnection.foregroundReady(id)
+            awaitDiagnostic(activity, R.string.vpn_service_foreground)
+
+            resetButton(activity).performClick()
+            assertEquals(1, cancellations)
+            assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
+            awaitDiagnostic(activity, R.string.vpn_blocked_stopping)
+            VpnConnection.tunnelReady(id)
+            assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
+            VpnConnection.serviceClosed(id, cleanupFailed = false)
+
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            assertEquals(activity.getString(R.string.vpn_reset_done), text(activity, R.id.connection_status))
+            assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+            assertNull(VpnConnection.claim(id) { error("obsolete request") })
+            assertEquals("Test profile", text(activity, R.id.profile_name))
+        }
+    }
+
+    @Test
+    fun displaysSafeParserFailureAfterTheServiceStops() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val invalidValue = "4294967295"
+            registerDocument(activity, validConfig().replace("Jc = 4", "Jc = $invalidValue"))
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            ShadowVpnService.setPrepareResult(null)
+            try {
+                val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+                assertTrue(connect.performClick())
+                awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_requesting_service))
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val serviceIntent = shadowOf(activity).nextStartedService
+                val service = Robolectric.buildService(AwgVpnService::class.java, serviceIntent).create()
+                val safeError = activity.getString(
+                    R.string.vpn_config_error_parameter,
+                    activity.getString(R.string.vpn_config_error_invalid_number),
+                    "Jc",
+                )
+                try {
+                    service.startCommand(0, 1)
+                    awaitViewText(activity, R.id.connection_diagnostics, safeError)
+                } finally {
+                    service.destroy()
+                }
+
+                awaitDiagnostic(activity, R.string.vpn_service_closed)
+                assertEquals(activity.getString(R.string.vpn_backend_invalid_profile), text(activity, R.id.connection_status))
+                val diagnostics = text(activity, R.id.connection_diagnostics)
+                assertTrue(diagnostics.contains(safeError))
+                assertFalse(diagnostics.contains(invalidValue))
+                assertTrue(connect.isEnabled)
+            } finally {
+                ShadowVpnService.reset()
+                VpnConnection.reset()
+            }
+        }
+    }
+
+    private fun requestVpnPermission(activity: MainActivity): ShadowActivity.IntentForResult {
+        assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).performClick())
+        awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))
+        return shadowOf(activity).nextStartedActivityForResult
+    }
+
+    private fun resetButton(activity: MainActivity): Button = activity.findViewById(R.id.reset_vpn_button)
+
+    private fun awaitDiagnostic(activity: MainActivity, message: Int) {
+        awaitViewText(activity, R.id.connection_diagnostics, activity.getString(message))
+    }
+
+    private fun awaitViewText(activity: MainActivity, id: Int, expected: String) {
+        val deadline = System.nanoTime() + 5_000_000_000L
+        val main = shadowOf(Looper.getMainLooper())
+        do {
+            main.idle()
+            if (text(activity, id).contains(expected)) return
+            Thread.sleep(10)
+        } while (System.nanoTime() < deadline)
+        assertTrue("Expected $expected in ${text(activity, id)}", text(activity, id).contains(expected))
+    }
+
+    @Implements(VpnService::class)
+    class VpnConsentShadow {
+        companion object {
+            const val ACTION = "com.kachur.vpn.test.CONSENT"
+            @Volatile var granted = false
+            @Volatile var prepareEntered: CountDownLatch? = null
+            @Volatile var prepareRelease: CountDownLatch? = null
+
+            @JvmStatic
+            @Implementation
+            @Suppress("UNUSED_PARAMETER")
+            fun prepare(context: Context): Intent? {
+                val release = prepareRelease
+                prepareEntered?.countDown()
+                release?.await(5, TimeUnit.SECONDS)
+                return if (granted) null else Intent(ACTION)
+            }
         }
     }
 

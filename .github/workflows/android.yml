@@ -18,6 +18,15 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
+      - name: Checkout official AmneziaWG Android sources
+        uses: actions/checkout@v4
+        with:
+          repository: amnezia-vpn/amneziawg-android
+          ref: 5c16489e2cd9ed3a0a7a27c7445bba5238132f86
+          submodules: recursive
+          path: .upstream-awg
+          persist-credentials: false
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -27,15 +36,41 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "platforms;android-35 build-tools;34.0.0"
+          packages: "platforms;android-35 platforms;android-36 build-tools;34.0.0 build-tools;36.0.0 ndk;28.2.13676358 cmake;3.22.1"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: false
+
+      - name: Build pinned AmneziaWG Android engine
+        run: bash third_party/amneziawg/build.sh .upstream-awg
+
+      - name: Test keepalive interoperability with AWG 2.0
+        run: |
+          test_dir=$(mktemp -d "$RUNNER_TEMP/check-awg-XXXXXX")
+          cp .upstream-awg/tunnel/tools/libwg-go/{go.mod,go.sum} third_party/amneziawg/tests/keepalive_test.go "$test_dir/"
+          cd "$test_dir"
+          go mod edit -require=github.com/amnezia-vpn/amneziawg-go@v0.2.18
+          GOTOOLCHAIN=local go test -mod=mod -timeout=45s .
+
       - name: Test and build debug APK
         run: gradle testDebugUnitTest assembleDebug --stacktrace
+
+      - name: Verify AmneziaWG binaries and licenses in APK
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+            unzip -Z1 "$apk" | grep -Fx "lib/$abi/libwg-go.so"
+          done
+          unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/amneziawg-android.txt"
+          unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/github.com_amnezia-vpn_amneziawg-go_v3-LICENSE.txt"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

@@ -15,6 +15,10 @@ internal class AwgConfig(
 
 internal class ConfigSection(private val fields: Map<String, String>) {
     operator fun get(field: String): String? = fields[field.lowercase()]
+
+    internal fun appendFields(destination: StringBuilder, formatValue: (String, String) -> String) {
+        fields.forEach { (name, value) -> destination.appendLine("$name = ${formatValue(name, value)}") }
+    }
 }
 
 internal class ConfigFormatException(
@@ -39,7 +43,7 @@ internal object AwgConfigParser {
     private val interfaceLists = setOf("address", "dns", "includedapplications", "excludedapplications")
     private val signatureFields = setOf("i1", "i2", "i3", "i4", "i5")
     private val optionalEmptyFields = signatureFields + "headerprotectionkey"
-    private val headerFields = listOf("h1", "h2", "h3", "h4")
+    val headerFields = listOf("h1", "h2", "h3", "h4")
     private val paddingFields = listOf("s1", "s2", "s3", "s4")
     private val timingFields = setOf(
         "rekeyaftertime", "rekeytimeout", "rejectaftertime", "keepalivetimeout",
@@ -152,7 +156,7 @@ internal object AwgConfigParser {
         "publickey", "presharedkey" -> validKey(value)
         "allowedips" -> validList(value, ::validCidr)
         "endpoint" -> validEndpoint(value)
-        "persistentkeepalive" -> range(value, allowOff = true) != null
+        "persistentkeepalive" -> value.isEmpty() || range(value, allowOff = true) != null
         "advancedsecurity" -> validBoolean(value)
         else -> null
     }
@@ -198,13 +202,15 @@ internal object AwgConfigParser {
         value.takeIf { decimal.matches(it) }?.toLongOrNull()?.takeIf { it <= maximum }
 
     private fun range(value: String, allowOff: Boolean = false): LongRange? {
-        if (allowOff && (value.equals("off", true) || value.equals("(off)", true))) return 0L..0L
+        if (allowOff && isOff(value)) return 0L..0L
         val separator = value.indexOf('-')
         val low = number(value.substringBefore('-').trim(), UINT32_MAX) ?: return null
         val high = if (separator < 0) low else
             number(value.substring(separator + 1).trim(), UINT32_MAX) ?: return null
         return (low..high).takeIf { low <= high }
     }
+
+    fun isOff(value: String): Boolean = value.equals("off", true) || value.equals("(off)", true)
 
     private fun validBoolean(value: String): Boolean = when (value.lowercase()) {
         "true", "false", "t", "f", "on", "off", "1", "0" -> true

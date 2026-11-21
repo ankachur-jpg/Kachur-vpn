@@ -2,6 +2,7 @@
 set -euo pipefail
 
 adb shell getprop ro.build.version.sdk
+adb shell getprop ro.build.version.codename
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w com.kachur.vpn.test/androidx.test.runner.AndroidJUnitRunner | tee instrumentation.txt

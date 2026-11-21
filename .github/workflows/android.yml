@@ -85,10 +85,34 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Select available Android emulator image
+        id: ui-image
+        run: |
+          find_android_17() {
+            sdkmanager --list --channel="$1" |
+              sed -nE 's/^[[:space:]]*system-images;android-(37(\.0)?|CinnamonBun);google_apis;x86_64[[:space:]]*\|.*/\1/p' |
+              head -n 1
+          }
+          channel=stable
+          image=$(find_android_17 0)
+          if [ -z "$image" ]; then
+            image=$(find_android_17 3)
+            if [ -n "$image" ]; then
+              channel=canary
+            else
+              image=36
+            fi
+          fi
+          echo "Using system image android-$image ($channel)"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Test Views and capture Android screenshots
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 37
+          api-level: 36
+          system-image-api-level: ${{ steps.ui-image.outputs.image }}
+          channel: ${{ steps.ui-image.outputs.channel }}
           target: google_apis
           arch: x86_64
           profile: pixel_6

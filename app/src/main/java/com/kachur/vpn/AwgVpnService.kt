@@ -13,7 +13,7 @@ import org.amnezia.awg.backend.BackendException
 import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import org.amnezia.awg.config.BadConfigException
-import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
@@ -29,6 +29,12 @@ internal object VpnConnection {
         private set
     var onChange: (() -> Unit)? = null
     private var pending: AwgConfig? = null
+    private var nextAttempt = 0L
+    private var attempt = 0L
+    private val main = Handler(Looper.getMainLooper())
+    private var startupDeadline: Runnable? = null
+    private val history = mutableListOf<Int>()
+    val stages: List<Int> get() = history
 
     fun publish(phase: VpnPhase, message: Int) {
         this.phase = phase
@@ -38,27 +44,97 @@ internal object VpnConnection {
 
     fun start(context: Context, config: AwgConfig) {
         if (phase != VpnPhase.IDLE) return
+        val id = ++nextAttempt
+        attempt = id
         pending = config
-        publish(VpnPhase.STARTING, R.string.vpn_starting)
+        history.clear()
+        history.add(R.string.vpn_permission_granted)
+        progress(id, R.string.vpn_requesting_service)
+        val service = serviceIntent(context).putExtra(EXTRA_ATTEMPT, id)
+        val deadline = Runnable {
+            val error = if (pending != null) R.string.vpn_service_timeout else R.string.vpn_setup_timeout
+            abortStartup(context, id, error)
+        }
+        startupDeadline = deadline
+        main.postDelayed(deadline, STARTUP_TIMEOUT_MS)
         try {
-            context.startForegroundService(Intent(context, AwgVpnService::class.java))
+            if (context.startForegroundService(service) == null) {
+                finish(id, R.string.vpn_service_rejected)
+            }
         } catch (_: RuntimeException) {
-            takeProfile()
-            publish(VpnPhase.IDLE, R.string.vpn_start_error)
+            finish(id, R.string.vpn_service_rejected)
         }
     }
 
-    fun takeProfile(): AwgConfig? = pending.also { pending = null }
+    fun takeProfile(id: Long): AwgConfig? =
+        if (id == attempt) pending.also { pending = null } else null
+
+    fun progress(id: Long, message: Int) {
+        if (id != attempt || id == 0L) return
+        history.add(message)
+        publish(VpnPhase.STARTING, message)
+    }
+
+    fun tunnelReady(id: Long) {
+        if (id != attempt || phase != VpnPhase.STARTING) return
+        clearDeadline()
+        history.add(R.string.vpn_waiting_handshake)
+        publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+    }
+
+    fun handshake(id: Long) {
+        if (id == attempt && phase == VpnPhase.WAITING) {
+            publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
+        }
+    }
+
+    fun finish(id: Long, message: Int) {
+        if (id != attempt || id == 0L) return
+        clearDeadline()
+        pending = null
+        attempt = 0
+        publish(VpnPhase.IDLE, message)
+    }
 
     fun stop(context: Context) {
+        if (phase == VpnPhase.STARTING) {
+            abortStartup(context, attempt, R.string.vpn_start_cancelled)
+            return
+        }
         if (phase != VpnPhase.WAITING && phase != VpnPhase.HANDSHAKE) return
+        val previous = phase
         publish(VpnPhase.STOPPING, R.string.vpn_stopping)
-        context.stopService(Intent(context, AwgVpnService::class.java))
+        try {
+            if (!context.stopService(serviceIntent(context))) finish(attempt, R.string.vpn_stop_error)
+        } catch (_: RuntimeException) {
+            publish(previous, R.string.vpn_stop_error)
+        }
     }
+
+    private fun abortStartup(context: Context, id: Long, message: Int) {
+        if (id != attempt || phase != VpnPhase.STARTING) return
+        if (pending == null) {
+            try {
+                context.stopService(serviceIntent(context))
+            } catch (_: RuntimeException) {
+                // Service callbacks from this attempt are invalidated below.
+            }
+        }
+        finish(id, message)
+    }
+
+    private fun clearDeadline() {
+        startupDeadline?.let(main::removeCallbacks)
+        startupDeadline = null
+    }
+
+    private fun serviceIntent(context: Context) = Intent(context, AwgVpnService::class.java)
+
+    const val EXTRA_ATTEMPT = "vpn_attempt"
+    const val STARTUP_TIMEOUT_MS = 30_000L
 }
 
 class AwgVpnService : VpnService() {
-    private val worker = Executors.newSingleThreadScheduledExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val tunnel = object : Tunnel {
         override fun getName() = "KachurVPN"
@@ -67,44 +143,60 @@ class AwgVpnService : VpnService() {
     private var backend: GoBackend? = null
     private var setup: Future<*>? = null
     @Volatile private var closing = false
-    private var started = false
+    private var attempt = 0L
+    private var polling: Future<*>? = null
     private var finalMessage = R.string.vpn_disconnected
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == STOP_ACTION) {
-            if (started) stopSelf()
+            if (attempt != 0L) stopSelf()
             return START_NOT_STICKY
         }
-        if (started) return START_NOT_STICKY
-        val config = VpnConnection.takeProfile()
+        if (attempt != 0L) return START_NOT_STICKY
+        val id = intent?.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L) ?: 0L
+        val config = VpnConnection.takeProfile(id)
         if (config == null) {
-            stopSelf()
+            // A cancelled or expired start may still be delivered by Android.
+            // Acknowledge startForegroundService before stopping this obsolete command.
+            if (id != 0L) {
+                try {
+                    startForeground(NOTIFICATION_ID, notification())
+                } catch (_: RuntimeException) {
+                    // No profile was claimed and no tunnel can be created.
+                }
+            }
+            stopSelf(startId)
             return START_NOT_STICKY
         }
-        started = true
+        attempt = id
+        VpnConnection.progress(id, R.string.vpn_service_started)
         try {
             startForeground(NOTIFICATION_ID, notification())
-            setup = worker.submit { establish(config) }
+            setup = worker.submit { establish(id, config) }
         } catch (_: RuntimeException) {
-            finalMessage = R.string.vpn_start_error
+            finalMessage = R.string.vpn_foreground_error
             stopSelf()
         }
         return START_NOT_STICKY
     }
 
-    private fun establish(profile: AwgConfig) {
+    private fun establish(id: Long, profile: AwgConfig) {
         if (closing) return
         try {
+            report(id, R.string.vpn_checking_profile)
             val config = profile.toBackendConfig()
             if (closing) return
+            report(id, R.string.vpn_loading_engine)
             val engine = GoBackend(applicationContext, this)
             backend = engine
+            if (closing) return
+            report(id, R.string.vpn_starting)
             check(engine.setState(tunnel, Tunnel.State.UP, config) == Tunnel.State.UP)
             main.post {
-                if (!closing) VpnConnection.publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+                if (!closing) VpnConnection.tunnelReady(id)
             }
             if (!closing) {
-                worker.scheduleWithFixedDelay({ pollHandshake(engine) }, 1, 2, TimeUnit.SECONDS)
+                polling = worker.scheduleWithFixedDelay({ pollHandshake(id, engine) }, 1, 2, TimeUnit.SECONDS)
             }
         } catch (_: BadConfigException) {
             fail(R.string.vpn_backend_invalid_profile)
@@ -121,15 +213,17 @@ class AwgVpnService : VpnService() {
         }
     }
 
-    private fun pollHandshake(engine: GoBackend) {
+    private fun report(id: Long, message: Int) {
+        main.post { if (!closing) VpnConnection.progress(id, message) }
+    }
+
+    private fun pollHandshake(id: Long, engine: GoBackend) {
         if (closing) return
         try {
             // This is evidence of a handshake, not a test of end-to-end traffic.
             when (engine.getLastHandshake(tunnel)) {
                 in 1L..Long.MAX_VALUE -> main.post {
-                    if (!closing && VpnConnection.phase != VpnPhase.HANDSHAKE) {
-                        VpnConnection.publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
-                    }
+                    if (!closing) VpnConnection.handshake(id)
                 }
                 -3L -> fail(R.string.vpn_start_error)
             }
@@ -165,6 +259,7 @@ class AwgVpnService : VpnService() {
         setup = null
         // Serialize teardown with setup and statistics so no JNI call can race with closing the TUN.
         worker.execute {
+            polling?.cancel(false)
             var message = finalMessage
             try {
                 backend?.setState(tunnel, Tunnel.State.DOWN, null)
@@ -175,11 +270,10 @@ class AwgVpnService : VpnService() {
             } finally {
                 backend = null
                 main.post {
-                    if (started) VpnConnection.publish(VpnPhase.IDLE, message)
+                    VpnConnection.finish(attempt, message)
                 }
             }
         }
-        worker.shutdown()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -206,6 +300,8 @@ class AwgVpnService : VpnService() {
     }
 
     private companion object {
+        // Serialize native setup and teardown across service instances after timeout or cancellation.
+        val worker = ScheduledThreadPoolExecutor(1).apply { removeOnCancelPolicy = true }
         const val CHANNEL = "amneziawg_vpn"
         const val NOTIFICATION_ID = 1
         const val STOP_ACTION = "com.kachur.vpn.STOP_VPN"

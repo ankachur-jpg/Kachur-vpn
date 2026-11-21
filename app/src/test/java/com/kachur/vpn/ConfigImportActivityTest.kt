@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ContentProvider
 import android.content.Context
+import android.content.ContextWrapper
+import android.content.ComponentName
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ProviderInfo
@@ -19,6 +21,7 @@ import android.widget.Button
 import android.widget.TextView
 import java.io.File
 import java.util.Base64
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -204,15 +207,88 @@ class ConfigImportActivityTest {
         }
     }
 
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun grantedResultWaitsForResumeAndAllowsRetryIfServiceNeverStarts() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+            try {
+                connect.performClick()
+                val consent = shadowOf(activity).nextStartedActivityForResult
+                controller.pause()
+                VpnConsentShadow.granted = true
+                assertTrue(activity.activityResultRegistry.dispatchResult(consent.requestCode, Activity.RESULT_OK, null))
+                assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+
+                controller.resume().postResume()
+                assertEquals(VpnPhase.STARTING, VpnConnection.phase)
+                assertEquals(activity.getString(R.string.vpn_cancel_start), connect.text.toString())
+                assertTrue(connect.isEnabled)
+                assertTrue(text(activity, R.id.connection_diagnostics).contains(activity.getString(R.string.vpn_permission_granted)))
+
+                shadowOf(Looper.getMainLooper()).idleFor(VpnConnection.STARTUP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                assertEquals(activity.getString(R.string.vpn_service_timeout), text(activity, R.id.connection_status))
+                assertEquals(activity.getString(R.string.connect_vpn), connect.text.toString())
+                assertTrue(connect.isEnabled)
+            } finally {
+                VpnConsentShadow.granted = false
+                VpnConnection.stop(activity.applicationContext)
+            }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun allowsRetryAfterReopeningWithAnUnansweredPermissionRequest() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+
+            activity.findViewById<Button>(R.id.connect_vpn_button).performClick()
+            val consent = shadowOf(activity).nextStartedActivityForResult
+            assertEquals(VpnConsentShadow.ACTION, consent.intent.action)
+            controller.recreate()
+            val reopened = controller.get()
+            assertEquals(reopened.getString(R.string.vpn_permission_no_result), text(reopened, R.id.connection_status))
+            assertTrue(reopened.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+        }
+    }
+
+    @Test
+    fun serviceLaunchRejectionReturnsToIdleAndDropsPendingProfile() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val rejectingContext = object : ContextWrapper(activity.applicationContext) {
+                override fun startForegroundService(service: Intent): ComponentName {
+                    assertEquals(AwgVpnService::class.java.name, service.component?.className)
+                    assertEquals(setOf(VpnConnection.EXTRA_ATTEMPT), service.extras?.keySet())
+                    throw SecurityException("synthetic system error")
+                }
+            }
+            VpnConnection.start(rejectingContext, AwgConfigParser.parse(validConfig()))
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            assertEquals(activity.getString(R.string.vpn_service_rejected), text(activity, R.id.connection_status))
+            assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+        }
+    }
+
     @Implements(VpnService::class)
     class VpnConsentShadow {
         companion object {
             const val ACTION = "com.kachur.vpn.test.CONSENT"
+            var granted = false
 
             @JvmStatic
             @Implementation
             @Suppress("UNUSED_PARAMETER")
-            fun prepare(context: Context): Intent = Intent(ACTION)
+            fun prepare(context: Context): Intent? = if (granted) null else Intent(ACTION)
         }
     }
 

@@ -50,4 +50,16 @@
     <string name="vpn_dns_error">Не удалось разрешить имя сервера VPN.</string>
     <string name="vpn_native_error">Не удалось загрузить нативный движок AmneziaWG.</string>
     <string name="vpn_backend_invalid_profile">Движок AWG 2.0 не принимает параметры этого профиля.</string>
+    <string name="vpn_permission_no_result">Android не подтвердил разрешение на VPN. Нажмите «Подключить VPN», чтобы повторить запрос.</string>
+    <string name="vpn_permission_granted">Разрешение Android получено.</string>
+    <string name="vpn_requesting_service">Запрос запуска службы VPN…</string>
+    <string name="vpn_service_started">Android запустил службу VPN.</string>
+    <string name="vpn_checking_profile">Проверка профиля движком AmneziaWG…</string>
+    <string name="vpn_loading_engine">Загрузка движка AmneziaWG…</string>
+    <string name="vpn_service_rejected">Android отклонил запуск службы VPN. Повторите попытку с открытым приложением.</string>
+    <string name="vpn_service_timeout">Служба VPN не ответила на запрос запуска. Попробуйте снова.</string>
+    <string name="vpn_setup_timeout">Туннель не запустился вовремя. Проверьте доступность сети и попробуйте снова.</string>
+    <string name="vpn_foreground_error">Не удалось запустить службу VPN с уведомлением. Попробуйте снова.</string>
+    <string name="vpn_cancel_start">Отменить подключение</string>
+    <string name="vpn_start_cancelled">Запуск VPN отменён.</string>
 </resources>

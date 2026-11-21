@@ -13,12 +13,14 @@ internal enum class VpnPhase(val label: Int) {
     STARTING(R.string.vpn_phase_starting),
     WAITING(R.string.vpn_phase_waiting),
     HANDSHAKE(R.string.vpn_phase_handshake),
+    RECOVERING(R.string.vpn_phase_recovering),
     STOPPING(R.string.vpn_phase_stopping),
 }
 
 internal class VpnStartOptions(
     val profile: AwgConfig,
     val routing: VpnRoutingSettings,
+    val country: String,
     val routePlan: IpRoutePlan? = null,
 ) {
     val exclusions: Set<String> get() = routing.apps
@@ -37,6 +39,10 @@ internal object VpnConnection {
     var resetGeneration = 0L
         private set
     var lastError: VpnError? = null
+        private set
+    var currentError: VpnError? = null
+        private set
+    var notificationRevision = 0L
         private set
     var serviceLaunch = R.string.vpn_service_not_requested
         private set
@@ -75,17 +81,25 @@ internal object VpnConnection {
         eventNumber++
         lastEvent = event
         if (error != null) lastError = error
-        observers.toList().forEach { it() }
+        notifyObservers()
     }
+
+    fun refreshNotification() {
+        notificationRevision++
+        notifyObservers()
+    }
+
+    private fun notifyObservers() = observers.toList().forEach { it() }
 
     fun publish(phase: VpnPhase, message: Int, error: VpnError? = null) {
         this.phase = phase
         this.message = message
+        currentError = error
         record(message, error)
     }
 
-    fun start(context: Context, config: AwgConfig) {
-        start(context, VpnStartOptions(config, SplitTunnelingSettings(context).snapshot()))
+    fun start(context: Context, config: AwgConfig, country: String = context.getString(R.string.vpn_country_default)) {
+        start(context, VpnStartOptions(config, SplitTunnelingSettings(context).snapshot(), country))
     }
 
     private fun start(context: Context, options: VpnStartOptions) {
@@ -152,20 +166,40 @@ internal object VpnConnection {
         if (active?.id == id && phase == VpnPhase.STARTING) publish(VpnPhase.STARTING, message)
     }
 
-    fun tunnelReady(id: Long) {
-        val attempt = active?.takeIf { it.id == id && phase == VpnPhase.STARTING } ?: return
+    fun tunnelReady(id: Long, provingRecovery: Boolean = true) {
+        val attempt = active?.takeIf { it.id == id } ?: return
+        when (phase) {
+            VpnPhase.STARTING -> {
+                clearDeadline(attempt)
+                publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+            }
+            VpnPhase.RECOVERING -> if (provingRecovery) {
+                publish(VpnPhase.RECOVERING, R.string.vpn_recovery_waiting_handshake)
+            } else {
+                publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+            }
+            else -> Unit
+        }
+    }
+
+    fun ownsAttempt(id: Long) = active?.id == id
+
+    fun recovering(id: Long, message: Int) {
+        val attempt = active?.takeIf { it.id == id && it.cancelService != null } ?: return
+        if (phase == VpnPhase.STOPPING) return
+        cancelRoutingCheck(attempt)
         clearDeadline(attempt)
-        publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
+        if (phase != VpnPhase.RECOVERING || this.message != message) publish(VpnPhase.RECOVERING, message)
     }
 
     fun handshake(id: Long) {
-        if (active?.id == id && phase == VpnPhase.WAITING) {
+        if (ownsAttempt(id) && (phase == VpnPhase.WAITING || phase == VpnPhase.RECOVERING)) {
             publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
         }
     }
 
     fun handshakeReadFailed(id: Long) {
-        if (active?.id == id && (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE)) {
+        if (ownsAttempt(id) && (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE || phase == VpnPhase.RECOVERING)) {
             record(R.string.vpn_handshake_read_error, error = VpnError(R.string.vpn_handshake_read_error))
         }
     }
@@ -220,7 +254,7 @@ internal object VpnConnection {
         }
         val appContext = context.applicationContext
         if (routing.ipRoutes.isEmpty()) {
-            attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing))
+            attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing, options.country))
             stopAttempt(attempt, R.string.vpn_disconnected)
             return
         }
@@ -255,7 +289,7 @@ internal object VpnConnection {
                 } else if (routing != SplitTunnelingSettings(appContext).snapshot()) {
                     publish(phase, R.string.ip_vpn_route_changed)
                 } else {
-                    attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing, plan))
+                    attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing, options.country, plan))
                     stopAttempt(attempt, R.string.vpn_disconnected)
                 }
             }
@@ -267,7 +301,11 @@ internal object VpnConnection {
         val attempt = active ?: return
         when (phase) {
             VpnPhase.STARTING -> stopAttempt(attempt, R.string.vpn_start_cancelled)
-            VpnPhase.WAITING, VpnPhase.HANDSHAKE -> stopAttempt(attempt, R.string.vpn_disconnected)
+            VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> stopAttempt(attempt, R.string.vpn_disconnected)
+            VpnPhase.STOPPING -> if (attempt.restart != null) {
+                cancelReconnect(attempt, R.string.vpn_disconnected)
+                publish(VpnPhase.STOPPING, R.string.vpn_stopping)
+            }
             else -> Unit
         }
     }

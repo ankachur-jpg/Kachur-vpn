@@ -613,6 +613,37 @@ class ConfigImportActivityTest {
         }
     }
 
+    @Test
+    fun mainScreenCanStopAnAttemptWhileItWaitsForTheNetwork() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            var stopped = 0
+            VpnConnection.start(activity.applicationContext, AwgConfigParser.parse(validConfig()), "Франция")
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val id = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            try {
+                assertEquals("Франция", VpnConnection.claim(id) { stopped++ }?.country)
+                VpnConnection.tunnelReady(id)
+                VpnConnection.handshake(id)
+                VpnConnection.recovering(id, R.string.vpn_recovery_waiting_network)
+                assertEquals(VpnPhase.RECOVERING, VpnConnection.phase)
+                val button = activity.findViewById<Button>(R.id.connect_vpn_button)
+                assertTrue(button.isEnabled)
+                assertEquals(activity.getString(R.string.vpn_disconnect), button.text.toString())
+                button.performClick()
+                assertEquals(1, stopped)
+                VpnConnection.recovering(id, R.string.vpn_recovery_connecting)
+                assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
+                VpnConnection.serviceClosed(id, cleanupFailed = false)
+                assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+                assertNull(shadowOf(activity).nextStartedService)
+            } finally {
+                VpnConnection.reset()
+                VpnConnection.serviceClosed(id, cleanupFailed = false)
+            }
+        }
+    }
+
     private fun requestVpnPermission(activity: MainActivity): ShadowActivity.IntentForResult {
         assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).performClick())
         awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))

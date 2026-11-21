@@ -9,7 +9,7 @@ import androidx.lifecycle.ViewModel
 import java.io.IOException
 import java.nio.charset.CharacterCodingException
 
-internal class ImportedProfile(val name: String, val config: AwgConfig)
+internal class ImportedProfile(val name: String, val config: AwgConfig, val documentKey: String)
 
 // Retain the profile and in-flight read across rotation without serializing credentials.
 internal class ImportSession : ViewModel() {
@@ -76,7 +76,7 @@ internal class ImportSession : ViewModel() {
                 main.post { record(R.string.import_profile_naming) }
                 val name = documentName(resolver, uri)
                 if (name == null) main.post { record(R.string.import_profile_default_name) }
-                imported = ImportedProfile(name ?: fallbackName, config)
+                imported = ImportedProfile(name ?: fallbackName, config, VpnProfileLabels.documentKey(uri))
             } catch (error: ConfigFormatException) {
                 line = error.line
                 message = when (error.problem) {

@@ -4,6 +4,8 @@
     <item type="id" name="import_profile_button" />
     <item type="id" name="import_diagnostics" />
     <item type="id" name="connection_status" />
+    <item type="id" name="vpn_notification_access" />
+    <item type="id" name="vpn_profile_country" />
     <item type="id" name="connect_vpn_button" />
     <item type="id" name="connection_diagnostics" />
     <item type="id" name="reset_vpn_button" />

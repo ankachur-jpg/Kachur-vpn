@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.content.Context
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -50,6 +51,7 @@ class VpnBackupTest {
         routeSettings.addIpRoutes(setOf("198.51.100.0/24"))
         assertTrue(VpnProfileLabels(context).saveCountry(profile.documentKey, "Франция"))
         VpnLaunchSettings(context).setEnabled(false)
+        VpnLaunchSettings(context).setRecoveryEnabled(false)
         assertEquals(IpUpdateResult.SUCCESS, IpFeedUpdater(context, { setOf("203.0.113.0/24") }).refresh())
         val store = VpnBackupStore(context)
         val password = "snapshot password".toCharArray()
@@ -61,6 +63,7 @@ class VpnBackupTest {
         feeds.change(false, emptyList(), IpUpdateSchedule.MANUAL)
         routeSettings.removeIpRoute("198.51.100.0/24")
         routeSettings.setExcluded("com.example.direct", false)
+        VpnLaunchSettings(context).setRecoveryEnabled(true)
         val revision = context.localProfiles().revision()
         val imported = BackupJson.decode(BackupCipher.decrypt(encrypted, password))
         assertEquals(revision, context.localProfiles().revision())
@@ -73,5 +76,14 @@ class VpnBackupTest {
         assertEquals(IpUpdateSchedule.DAILY, feeds.configuration().schedule)
         assertEquals(listOf(source), feeds.configuration().custom)
         assertFalse(VpnLaunchSettings(context).enabled)
+        assertFalse(VpnLaunchSettings(context).recoveryEnabled)
+    }
+
+    @Test
+    fun backupsWithoutRecoverySettingEnableItByDefault() {
+        val json = JSONObject(BackupJson.encode(VpnBackupStore(context).snapshot()).toString(Charsets.UTF_8))
+        json.remove("autoRecovery")
+        val oldBackup = BackupJson.decode(json.toString().toByteArray(Charsets.UTF_8))
+        assertTrue(oldBackup.autoRecovery)
     }
 }

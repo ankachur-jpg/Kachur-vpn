@@ -13,13 +13,16 @@ import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
 import android.net.VpnService
+import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.view.View
 import android.widget.Button
+import android.widget.Switch
 import android.widget.TextView
 import java.io.File
+import java.time.Duration
 import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -622,26 +625,54 @@ class ConfigImportActivityTest {
             VpnConnection.start(activity.applicationContext, AwgConfigParser.parse(validConfig()), "Франция")
             awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
             val id = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            var retries = 0
+            val recovery = VpnRecovery(Handler(Looper.getMainLooper()),
+                state = { VpnConnection.recovering(id, it) }, releaseTunnel = {}, startTunnel = { retries++ },
+                jitter = { 0L })
             try {
-                assertEquals("Франция", VpnConnection.claim(id) { stopped++ }?.country)
+                val options = VpnConnection.claim(id) {
+                    recovery.cancel()
+                    stopped++
+                }
+                assertEquals("Франция", options?.country)
                 VpnConnection.tunnelReady(id)
                 VpnConnection.handshake(id)
-                VpnConnection.recovering(id, R.string.vpn_recovery_waiting_network)
+                recovery.networkChanged(1L)
+                recovery.networkChanged(null)
                 assertEquals(VpnPhase.RECOVERING, VpnConnection.phase)
                 val button = activity.findViewById<Button>(R.id.connect_vpn_button)
                 assertTrue(button.isEnabled)
                 assertEquals(activity.getString(R.string.vpn_disconnect), button.text.toString())
                 button.performClick()
                 assertEquals(1, stopped)
+                assertFalse(recovery.recovering)
                 VpnConnection.recovering(id, R.string.vpn_recovery_connecting)
                 assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
                 VpnConnection.serviceClosed(id, cleanupFailed = false)
+                recovery.networkChanged(2L)
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(10))
+                assertEquals(0, retries)
                 assertEquals(VpnPhase.IDLE, VpnConnection.phase)
                 assertNull(shadowOf(activity).nextStartedService)
             } finally {
                 VpnConnection.reset()
                 VpnConnection.serviceClosed(id, cleanupFailed = false)
             }
+        }
+    }
+
+    @Test
+    fun automaticRecoverySwitchDefaultsToOnAndPersistsSeparatelyFromLaunchSetting() {
+        val context = RuntimeEnvironment.getApplication()
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val toggle = controller.get().findViewById<Switch>(R.id.vpn_auto_recovery)
+            assertTrue(toggle.isChecked)
+            toggle.performClick()
+            assertFalse(VpnLaunchSettings(context).recoveryEnabled)
+        }
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            assertFalse(controller.get().findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
+            assertTrue(VpnLaunchSettings(context).enabled)
         }
     }
 
@@ -706,13 +737,24 @@ class ConfigImportActivityTest {
                 awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
                 val id = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
                 var stopped = 0
-                assertEquals(R.string.vpn_country_default.let(activity::getString), VpnConnection.claim(id) { stopped++ }?.country)
+                var retries = 0
+                val recovery = VpnRecovery(Handler(Looper.getMainLooper()),
+                    state = { VpnConnection.recovering(id, it) }, releaseTunnel = {}, startTunnel = { retries++ },
+                    jitter = { 0L })
+                val options = VpnConnection.claim(id) {
+                    recovery.cancel()
+                    stopped++
+                }
+                assertEquals(R.string.vpn_country_default.let(activity::getString), options?.country)
                 VpnConnection.tunnelReady(id)
                 VpnConnection.handshake(id)
                 controller.pause().resume().postResume()
                 assertNull(shadowOf(activity).nextStartedService)
 
-                val pending = VpnNotifications(context).build(VpnNotice(VpnNoticeStatus.CONNECTED, "Test"), id)
+                recovery.networkChanged(1L)
+                recovery.networkChanged(2L)
+                assertEquals(R.string.vpn_recovery_scheduled, VpnConnection.message)
+                val pending = VpnNotifications(context).build(VpnNotice(VpnNoticeStatus.RECONNECTING, "Test"), id)
                     .actions.single().actionIntent
                 assertTrue(shadowOf(pending).isBroadcast)
                 pending.send()
@@ -725,6 +767,8 @@ class ConfigImportActivityTest {
                 assertTrue(VpnLaunchSettings(context).paused)
 
                 controller.pause().resume().postResume()
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMinutes(10))
+                assertEquals(0, retries)
                 assertNull(shadowOf(activity).nextStartedService)
             }
             Robolectric.buildActivity(MainActivity::class.java).setup().use { reopened ->

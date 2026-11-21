@@ -3,6 +3,7 @@
     <string name="no_profile">Профиль не импортирован</string>
     <string name="vpn_disconnected">Отключено</string>
     <string name="vpn_auto_connect">Подключать VPN при открытии</string>
+    <string name="vpn_auto_recovery">Автоматически восстанавливать VPN</string>
     <string name="vpn_auto_paused">Автоподключение приостановлено до ручного подключения</string>
     <string name="vpn_auto_other_vpn">Автоподключение отложено. Android уже использует VPN.</string>
     <string name="vpn_blocked_profile_restore">Открывается локальный профиль</string>
@@ -111,11 +112,9 @@
     <string name="vpn_country_invalid">Введите название страны длиной до 48 символов.</string>
     <string name="vpn_phase_recovering">Переподключение</string>
     <string name="vpn_recovery_waiting_network">Ждём восстановления интернета…</string>
-    <string name="vpn_recovery_scheduled">Готовим переподключение VPN…</string>
+    <string name="vpn_recovery_scheduled">Ждём следующей попытки подключения VPN…</string>
     <string name="vpn_recovery_connecting">Переподключаем VPN…</string>
     <string name="vpn_recovery_waiting_handshake">Проверяем handshake после переподключения…</string>
-    <string name="vpn_recovery_exhausted">Не удалось восстановить VPN за три попытки.</string>
-    <string name="vpn_recovery_timeout">Время ожидания восстановления VPN истекло.</string>
     <string name="vpn_network_monitor_error">Android не смог отслеживать смену сети. Автопереподключение недоступно.</string>
     <string name="vpn_start_error">Не удалось запустить туннель AmneziaWG.</string>
     <string name="vpn_stop_error">При завершении туннеля произошла ошибка.</string>

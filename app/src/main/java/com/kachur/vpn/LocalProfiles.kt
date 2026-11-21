@@ -112,6 +112,7 @@ internal class VpnLaunchSettings(context: Context) {
 
     val enabled: Boolean get() = prefs.getBoolean(ENABLED, true)
     val paused: Boolean get() = prefs.getBoolean(PAUSED, false)
+    val recoveryEnabled: Boolean get() = prefs.getBoolean(RECOVERY_ENABLED, true)
 
     fun setEnabled(enabled: Boolean) = synchronized(SplitTunnelingSettings.ipSettingsLock) {
         val writer = prefs.edit().putBoolean(ENABLED, enabled)
@@ -123,8 +124,13 @@ internal class VpnLaunchSettings(context: Context) {
         prefs.edit().putBoolean(PAUSED, paused).apply()
     }
 
+    fun setRecoveryEnabled(enabled: Boolean) = synchronized(SplitTunnelingSettings.ipSettingsLock) {
+        prefs.edit().putBoolean(RECOVERY_ENABLED, enabled).apply()
+    }
+
     companion object {
         const val ENABLED = "vpn_auto_connect"
         const val PAUSED = "vpn_auto_connect_paused"
+        const val RECOVERY_ENABLED = "vpn_auto_recovery"
     }
 }

@@ -7,6 +7,7 @@
     <item type="id" name="vpn_notification_access" />
     <item type="id" name="vpn_profile_country" />
     <item type="id" name="vpn_auto_connect" />
+    <item type="id" name="vpn_auto_recovery" />
     <item type="id" name="backup_open_screen" />
     <item type="id" name="backup_export" />
     <item type="id" name="backup_open" />

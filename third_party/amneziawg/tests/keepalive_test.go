@@ -56,6 +56,15 @@ func TestKeepaliveRangeIsAppliedByGo(t *testing.T) {
 }
 
 func TestRangedKeepaliveWithAWG2Peer(t *testing.T) {
+	testAWG2Peer(t, "22-35", false)
+}
+
+func TestRecoveryHandshakeWithKeepaliveDisabled(t *testing.T) {
+	testAWG2Peer(t, "0", true)
+}
+
+func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool) {
+	t.Helper()
 	clientTun := tuntest.NewChannelTUN()
 	serverTun := oldTun.NewChannelTUN()
 	client := device.NewDevice(clientTun.TUN(), conn.NewStdNetBind(), device.NewLogger(device.LogLevelSilent, ""))
@@ -74,9 +83,25 @@ func TestRangedKeepaliveWithAWG2Peer(t *testing.T) {
 	clientIP := netip.MustParseAddr("192.0.2.1")
 	serverIP := netip.MustParseAddr("192.0.2.2")
 	apply(t, server, peerSettings(t, clientKey, client, clientIP))
-	apply(t, client, peerSettings(t, serverKey, server, serverIP)+"persistent_keepalive_interval=22-35\n")
-	if getField(t, client, "persistent_keepalive_interval") != "22-35" {
+	apply(t, client, peerSettings(t, serverKey, server, serverIP)+"persistent_keepalive_interval="+keepalive+"\n")
+	if !initiateHandshake && getField(t, client, "persistent_keepalive_interval") != keepalive {
 		t.Fatal("new engine did not preserve the range")
+	}
+	if initiateHandshake {
+		var publicKey device.NoisePublicKey
+		copy(publicKey[:], serverKey.PublicKey().Bytes())
+		peer := client.LookupPeer(publicKey)
+		if peer == nil || getField(t, client, "last_handshake_time_sec") != "0" {
+			t.Fatal("recovery must start with a fresh peer")
+		}
+		peer.SendKeepalive()
+		deadline := time.Now().Add(8 * time.Second)
+		for getField(t, client, "last_handshake_time_sec") == "0" {
+			if time.Now().After(deadline) {
+				t.Fatal("empty AWG packet did not establish a new handshake")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 
 	checkDelivery(t, tuntest.Ping(serverIP, clientIP), clientTun.Outbound, serverTun.Inbound)

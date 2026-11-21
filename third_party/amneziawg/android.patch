@@ -24,7 +24,7 @@
  
  import androidx.annotation.Nullable;
  import androidx.collection.ArraySet;
-@@ -42,7 +45,10 @@
+@@ -42,7 +45,26 @@
   * AmneziaWG tunnels.
   */
  @NonNullForAll
@@ -32,10 +32,26 @@
  public final class GoBackend implements Backend {
 +    @Nullable private android.net.VpnService managedService;
 +    @Nullable private Consumer<android.net.VpnService.Builder> configureRoutes;
++    private static native void awgSendKeepalive(int handle, String peerPublicKey);
++
++    /** Initiate normal AWG handshake traffic over the already protected sockets. */
++    public boolean requestHandshake(final Tunnel tunnel) {
++        if (tunnel != currentTunnel || currentTunnelHandle == -1 || currentConfig == null)
++            return false;
++        boolean requested = false;
++        for (final Peer peer : currentConfig.getPeers()) {
++            if (peer.getEndpoint().isPresent()) {
++                awgSendKeepalive(currentTunnelHandle, peer.getPublicKey().toHex());
++                requested = true;
++            }
++        }
++        return requested;
++    }
++
      private static final int DNS_RESOLUTION_RETRIES = 10;
      private static final String TAG = "AmneziaWG/GoBackend";
      @Nullable private static AlwaysOnCallback alwaysOnCallback;
-@@ -51,7 +57,6 @@
+@@ -51,7 +73,6 @@
      @Nullable private Config currentConfig;
      @Nullable private Tunnel currentTunnel;
      private int currentTunnelHandle = -1;
@@ -43,7 +59,7 @@
      @Nullable private StatusCallback statusCallback;
  
      /**
-@@ -62,6 +67,17 @@
+@@ -62,6 +83,17 @@
      public GoBackend(final Context context) {
          SharedLibraryLoader.loadSharedLibrary(context, "wg-go");
          this.context = context;
@@ -61,7 +77,7 @@
      }
  
      /**
-@@ -188,19 +204,17 @@
+@@ -188,19 +220,17 @@
              return -2;
          }
  
@@ -84,7 +100,7 @@
      }
  
      /**
-@@ -210,67 +224,6 @@
+@@ -210,67 +240,6 @@
       */
      public void setStatusCallback(@Nullable final StatusCallback callback) {
          this.statusCallback = callback;
@@ -152,7 +168,7 @@
      }
  
      /**
-@@ -330,20 +283,9 @@
+@@ -330,20 +299,9 @@
              if (VpnService.prepare(context) != null)
                  throw new BackendException(Reason.VPN_NOT_AUTHORIZED);
  
@@ -176,7 +192,7 @@
  
              if (currentTunnelHandle != -1) {
                  Log.w(TAG, "Tunnel already up");
-@@ -359,11 +301,11 @@
+@@ -359,11 +317,11 @@
                          continue;
                      if (ep.getResolved().orElse(null) == null) {
                          if (i < DNS_RESOLUTION_RETRIES - 1) {
@@ -190,7 +206,7 @@
                      }
                  }
                  break;
-@@ -373,11 +315,16 @@
+@@ -373,11 +331,16 @@
              final String goConfig = config.toAwgUserspaceString();
  
              // Create the vpn tunnel with android API
@@ -210,7 +226,7 @@
  
              for (final String includedApplication : config.getInterface().getIncludedApplications())
                  builder.addAllowedApplication(includedApplication);
-@@ -396,9 +343,17 @@
+@@ -396,9 +359,17 @@
                  for (final InetNetwork addr : peer.getAllowedIps()) {
                      if (addr.getMask() == 0)
                          sawDefaultRoute = true;
@@ -231,7 +247,7 @@
  
              // "Kill-switch" semantics
              if (!(sawDefaultRoute && config.getPeers().size() == 1)) {
-@@ -423,27 +378,35 @@
+@@ -423,27 +394,35 @@
              if (currentTunnelHandle < 0)
                  throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
  
@@ -441,7 +457,29 @@
  	handle.device.Close()
  }
  
-@@ -203,7 +118,18 @@
+@@ -193,6 +108,21 @@
+ 	return int32(fd)
+ }
+ 
++//export awgSendKeepalive
++func awgSendKeepalive(tunnelHandle int32, peerPublicKey string) {
++	handle, ok := tunnelHandles[tunnelHandle]
++	if !ok {
++		return
++	}
++	var key device.NoisePublicKey
++	if err := key.FromHex(peerPublicKey); err != nil {
++		return
++	}
++	if peer := handle.device.LookupPeer(key); peer != nil {
++		peer.SendKeepalive()
++	}
++}
++
+ //export awgGetConfig
+ func awgGetConfig(tunnelHandle int32) *C.char {
+ 	handle, ok := tunnelHandles[tunnelHandle]
+@@ -203,7 +133,18 @@
  	if err != nil {
  		return nil
  	}
@@ -475,7 +513,13 @@
  
  struct go_string { const char *str; long n; };
  extern int awgTurnOn(struct go_string ifname, int tun_fd, struct go_string settings);
-@@ -18,8 +20,17 @@
+@@ -13,13 +15,23 @@
+ extern int awgGetSocketV4(int handle);
+ extern int awgGetSocketV6(int handle);
+ extern char *awgGetConfig(int handle);
++extern void awgSendKeepalive(int handle, struct go_string peer_public_key);
+ extern char *awgVersion();
+ 
  JNIEXPORT jint JNICALL Java_org_amnezia_awg_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
  {
  	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, 0);
@@ -493,6 +537,22 @@
  	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
  	int ret = awgTurnOn((struct go_string){
  		.str = ifname_str,
+@@ -48,6 +60,15 @@
+ 	return awgGetSocketV6(handle);
+ }
+ 
++JNIEXPORT void JNICALL Java_org_amnezia_awg_backend_GoBackend_awgSendKeepalive(JNIEnv *env, jclass c, jint handle, jstring peer_public_key)
++{
++	const char *key = (*env)->GetStringUTFChars(env, peer_public_key, 0);
++	if (!key)
++		return;
++	awgSendKeepalive(handle, (struct go_string){.str = key, .n = (*env)->GetStringUTFLength(env, peer_public_key)});
++	(*env)->ReleaseStringUTFChars(env, peer_public_key, key);
++}
++
+ JNIEXPORT jstring JNICALL Java_org_amnezia_awg_GoBackend_awgGetConfig(JNIEnv *env, jclass c, jint handle)
+ {
+ 	jstring ret;
 --- a/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
 +++ b/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
 @@ -17,6 +17,7 @@

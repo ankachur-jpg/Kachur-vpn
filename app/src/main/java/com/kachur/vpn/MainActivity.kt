@@ -1,21 +1,30 @@
 package com.kachur.vpn
 
+import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.ContentResolver
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
+import android.text.InputFilter
 import android.text.method.ScrollingMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -26,6 +35,8 @@ import java.util.concurrent.Future
 class MainActivity : ComponentActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
+    private lateinit var profileCountry: Button
+    private lateinit var notificationAccess: Button
     private lateinit var diagnostics: TextView
     private lateinit var feedback: TextView
     private lateinit var importButton: Button
@@ -40,6 +51,8 @@ class MainActivity : ComponentActivity() {
     private val permissionPending: Boolean
         get() = permissionRequest?.let { it.dialogLaunched && !it.resultReceived } == true
     private var permissionMessage: Int? = null
+    private val labels by lazy { VpnProfileLabels(applicationContext) }
+    private val notificationSettings by lazy { getSharedPreferences("vpn_notifications", MODE_PRIVATE) }
 
     private class PermissionRequest(
         val key: String = "vpn-permission-${UUID.randomUUID()}",
@@ -69,6 +82,10 @@ class MainActivity : ComponentActivity() {
             }
             else -> session.finish(R.string.unexpected_picker_result)
         }
+    }
+
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        renderNotificationAccess()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -147,6 +164,17 @@ class MainActivity : ComponentActivity() {
         layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
         profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
         layout.addView(profileName)
+        profileCountry = Button(this).apply {
+            id = R.id.vpn_profile_country
+            setOnClickListener { editCountry() }
+        }
+        layout.addView(profileCountry)
+        notificationAccess = Button(this).apply {
+            id = R.id.vpn_notification_access
+            setText(R.string.vpn_notification_access)
+            setOnClickListener { openNotificationAccess() }
+        }
+        layout.addView(notificationAccess)
         layout.addView(Button(this).apply {
             id = R.id.split_open_button
             setText(R.string.split_title)
@@ -178,6 +206,7 @@ class MainActivity : ComponentActivity() {
 
         session.onChange = ::render
         render()
+        renderNotificationAccess()
         permissionRequest?.let { request ->
             armPermissionDeadline(request, PERMISSION_RESULT_TIMEOUT_MS)
             if (permissionPending) {
@@ -217,6 +246,7 @@ class MainActivity : ComponentActivity() {
             session.finish(R.string.picker_no_callback)
         }
         renderConnection()
+        renderNotificationAccess()
     }
 
     override fun onPause() {
@@ -274,7 +304,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun render() {
-        profileName.text = session.profile?.name ?: getString(R.string.no_profile)
+        val profile = session.profile
+        profileName.text = profile?.name ?: getString(R.string.no_profile)
+        profileCountry.visibility = if (profile == null) View.GONE else View.VISIBLE
+        if (profile != null) profileCountry.text = getString(R.string.vpn_country_label, labels.country(profile.documentKey))
         diagnostics.text = session.stages.joinToString("\n") { getString(it) }
         diagnostics.visibility = if (session.stages.isEmpty()) View.GONE else View.VISIBLE
         val message = session.feedback
@@ -296,6 +329,7 @@ class MainActivity : ComponentActivity() {
         val phase = VpnConnection.phase
         val blocked = connectionButtonBlockReason()
         importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
+        profileCountry.isEnabled = importButton.isEnabled
         connectButton.isEnabled = blocked == null
         reconnectButton.isEnabled = !VpnConnection.checkingRoutes
         reconnectButton.visibility = if (VpnConnection.routingNeedsReconnect(applicationContext)) {
@@ -305,7 +339,7 @@ class MainActivity : ComponentActivity() {
         }
         connectButton.setText(when (phase) {
             VpnPhase.STARTING -> R.string.vpn_cancel_start
-            VpnPhase.WAITING, VpnPhase.HANDSHAKE -> R.string.vpn_disconnect
+            VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> R.string.vpn_disconnect
             else -> R.string.connect_vpn
         })
         connectionStatus.setText(if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message)
@@ -320,6 +354,54 @@ class MainActivity : ComponentActivity() {
             getString(VpnConnection.serviceResponse),
             VpnConnection.lastError?.display(this) ?: getString(R.string.vpn_no_error),
         )
+    }
+
+    private fun editCountry() {
+        val profile = session.profile ?: return
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            filters = arrayOf(InputFilter.LengthFilter(VpnProfileLabels.MAX_LENGTH))
+            setText(labels.country(profile.documentKey))
+            selectAll()
+        }
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.vpn_country_title).setView(input)
+            .setNegativeButton(android.R.string.cancel, null).setPositiveButton(R.string.vpn_country_save, null).show()
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+            if (labels.saveCountry(profile.documentKey, input.text.toString())) {
+                dialog.dismiss()
+                render()
+            } else {
+                input.error = getString(R.string.vpn_country_invalid)
+            }
+        }
+    }
+
+    private fun renderNotificationAccess() {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val channelBlocked = manager.getNotificationChannel(VpnNotifications.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
+        notificationAccess.visibility = if (manager.areNotificationsEnabled() && !channelBlocked) View.GONE else View.VISIBLE
+    }
+
+    private fun openNotificationAccess() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
+                (!notificationSettings.getBoolean(NOTIFICATION_ASKED, false) ||
+                    shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS))
+            ) {
+                notificationSettings.edit().putBoolean(NOTIFICATION_ASKED, true).apply()
+                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                return
+            }
+            val manager = getSystemService(NotificationManager::class.java)
+            val channelBlocked = manager?.areNotificationsEnabled() == true &&
+                manager.getNotificationChannel(VpnNotifications.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
+            val intent = if (channelBlocked) Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, VpnNotifications.CHANNEL) else Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            startActivity(intent.putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+        } catch (_: RuntimeException) {
+            Toast.makeText(this, R.string.vpn_notification_settings_unavailable, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun connectionButtonBlockReason(): Int? = when {
@@ -414,7 +496,7 @@ class MainActivity : ComponentActivity() {
         if (profile == null) {
             showPermissionMessage(R.string.vpn_profile_required, error = true)
         } else {
-            VpnConnection.start(applicationContext, profile.config)
+            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey))
         }
         renderConnection()
     }
@@ -466,5 +548,6 @@ class MainActivity : ComponentActivity() {
         const val PERMISSION_RESULT_TIMEOUT_MS = 60_000L
         const val PICKER_IN_PROGRESS = "config_picker_in_progress"
         const val IMPORT_IN_PROGRESS = "config_import_in_progress"
+        const val NOTIFICATION_ASKED = "post_notifications_asked"
     }
 }

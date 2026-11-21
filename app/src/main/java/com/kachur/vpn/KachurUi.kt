@@ -16,6 +16,7 @@ import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -97,7 +98,7 @@ internal fun Context.uiScroll(content: View): ScrollView = ScrollView(this).appl
     isFillViewport = true
     clipToPadding = false
     overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-    addView(content, ScrollView.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+    addView(content, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
 }
 
 internal fun Context.uiShape(fill: Int, radius: Int, stroke: Int? = null): GradientDrawable =

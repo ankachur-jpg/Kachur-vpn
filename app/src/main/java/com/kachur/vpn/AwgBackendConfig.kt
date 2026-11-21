@@ -8,25 +8,47 @@ import org.amnezia.awg.config.BadConfigException.Reason
 import org.amnezia.awg.config.BadConfigException.Section
 import org.amnezia.awg.config.Config
 
-// Keep every option. Normalize spellings with the same meaning in the pinned engine.
-internal fun AwgConfig.toBackendConfig(): Config = buildString {
-    appendLine("[Interface]")
-    interfaceSection.appendFields(this) { name, value ->
-        // Go's header parser requires compact ranges even though Config.parse accepts spaces.
-        if (name in AwgConfigParser.headerFields) compactRange(value)
-        else value
+// Android cannot combine allowed and disallowed application lists on a VPN.
+internal fun AwgConfig.includedAppsAfterExclusions(exclusions: Set<String>): List<String>? =
+    interfaceSection["IncludedApplications"]?.split(',')?.map { it.trim() }?.filterNot(exclusions::contains)
+
+internal class NoIncludedVpnAppsException : Exception("No applications remain in the VPN allowlist")
+
+internal fun AwgConfig.toBackendConfig(exclusions: Set<String> = emptySet()): Config {
+    val included = includedAppsAfterExclusions(exclusions)
+    if (included?.isEmpty() == true) throw NoIncludedVpnAppsException()
+    val importedExclusions = interfaceSection["ExcludedApplications"]
+    val disallowed = if (included == null) {
+        importedExclusions?.split(',')?.map { it.trim() }.orEmpty().toSet() + exclusions
+    } else {
+        emptySet()
     }
-    for (peer in peers) {
-        appendLine("[Peer]")
-        peer.appendFields(this) { name, value ->
+
+    return buildString {
+        appendLine("[Interface]")
+        interfaceSection.appendFields(this) { name, value ->
             when {
-                name != "persistentkeepalive" -> value
-                value.isEmpty() || AwgConfigParser.isOff(value) -> "0"
-                else -> compactRange(value)
+                name in AwgConfigParser.headerFields -> compactRange(value)
+                name == "includedapplications" -> checkNotNull(included).joinToString(", ")
+                name == "excludedapplications" -> disallowed.joinToString(", ")
+                else -> value
             }
         }
-    }
-}.reader().buffered().use(Config::parse)
+        if (importedExclusions == null && disallowed.isNotEmpty()) {
+            appendLine("ExcludedApplications = ${disallowed.joinToString(", ")}")
+        }
+        for (peer in peers) {
+            appendLine("[Peer]")
+            peer.appendFields(this) { name, value ->
+                when {
+                    name != "persistentkeepalive" -> value
+                    value.isEmpty() || AwgConfigParser.isOff(value) -> "0"
+                    else -> compactRange(value)
+                }
+            }
+        }
+    }.reader().buffered().use(Config::parse)
+}
 
 private fun compactRange(value: String): String = value.split('-', limit = 2).joinToString("-") { it.trim() }
 

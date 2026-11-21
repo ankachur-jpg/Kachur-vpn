@@ -7,4 +7,12 @@
     <item type="id" name="connect_vpn_button" />
     <item type="id" name="connection_diagnostics" />
     <item type="id" name="reset_vpn_button" />
+    <item type="id" name="split_open_button" />
+    <item type="id" name="main_split_reconnect_button" />
+    <item type="id" name="split_reconnect_button" />
+    <item type="id" name="split_search" />
+    <item type="id" name="split_categories" />
+    <item type="id" name="split_apps" />
+    <item type="id" name="split_app_switch" />
+    <item type="id" name="split_empty" />
 </resources>

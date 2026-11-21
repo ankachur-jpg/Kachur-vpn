@@ -1,6 +1,14 @@
 --- a/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
 +++ b/tunnel/src/main/java/org/amnezia/awg/backend/GoBackend.java
-@@ -42,7 +42,9 @@
+@@ -7,6 +7,7 @@
+ 
+ import android.content.Context;
+ import android.content.Intent;
++import android.content.pm.PackageManager;
+ import android.os.Build;
+ import android.os.ParcelFileDescriptor;
+ import android.system.OsConstants;
+@@ -42,7 +43,9 @@
   * AmneziaWG tunnels.
   */
  @NonNullForAll
@@ -10,7 +18,7 @@
      private static final int DNS_RESOLUTION_RETRIES = 10;
      private static final String TAG = "AmneziaWG/GoBackend";
      @Nullable private static AlwaysOnCallback alwaysOnCallback;
-@@ -51,7 +53,6 @@
+@@ -51,7 +54,6 @@
      @Nullable private Config currentConfig;
      @Nullable private Tunnel currentTunnel;
      private int currentTunnelHandle = -1;
@@ -18,7 +26,7 @@
      @Nullable private StatusCallback statusCallback;
  
      /**
-@@ -62,6 +63,11 @@
+@@ -62,6 +64,11 @@
      public GoBackend(final Context context) {
          SharedLibraryLoader.loadSharedLibrary(context, "wg-go");
          this.context = context;
@@ -30,7 +38,7 @@
      }
  
      /**
-@@ -188,19 +194,17 @@
+@@ -188,19 +195,17 @@
              return -2;
          }
  
@@ -53,7 +61,7 @@
      }
  
      /**
-@@ -210,67 +214,6 @@
+@@ -210,67 +215,6 @@
       */
      public void setStatusCallback(@Nullable final StatusCallback callback) {
          this.statusCallback = callback;
@@ -121,7 +129,7 @@
      }
  
      /**
-@@ -330,20 +273,9 @@
+@@ -330,20 +274,9 @@
              if (VpnService.prepare(context) != null)
                  throw new BackendException(Reason.VPN_NOT_AUTHORIZED);
  
@@ -145,7 +153,7 @@
  
              if (currentTunnelHandle != -1) {
                  Log.w(TAG, "Tunnel already up");
-@@ -359,11 +291,11 @@
+@@ -359,11 +292,11 @@
                          continue;
                      if (ep.getResolved().orElse(null) == null) {
                          if (i < DNS_RESOLUTION_RETRIES - 1) {
@@ -159,7 +167,7 @@
                      }
                  }
                  break;
-@@ -373,7 +305,7 @@
+@@ -373,11 +306,16 @@
              final String goConfig = config.toAwgUserspaceString();
  
              // Create the vpn tunnel with android API
@@ -167,8 +175,19 @@
 +            final VpnService.Builder builder = service.new Builder();
              builder.setSession(tunnel.getName());
  
-             for (final String excludedApplication : config.getInterface().getExcludedApplications())
-@@ -423,27 +355,35 @@
+-            for (final String excludedApplication : config.getInterface().getExcludedApplications())
+-                builder.addDisallowedApplication(excludedApplication);
++            for (final String excludedApplication : config.getInterface().getExcludedApplications()) {
++                try {
++                    builder.addDisallowedApplication(excludedApplication);
++                } catch (final PackageManager.NameNotFoundException ignored) {
++                    // A stored package may have been removed before establishing this tunnel.
++                }
++            }
+ 
+             for (final String includedApplication : config.getInterface().getIncludedApplications())
+                 builder.addAllowedApplication(includedApplication);
+@@ -423,27 +361,35 @@
              if (currentTunnelHandle < 0)
                  throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
  
@@ -430,3 +449,29 @@
  	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
  	int ret = awgTurnOn((struct go_string){
  		.str = ifname_str,
+--- a/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
++++ b/tunnel/src/main/java/org/amnezia/awg/config/Interface.java
+@@ -17,6 +17,7 @@
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.LinkedHashSet;
++import java.util.Arrays;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Objects;
+@@ -887,12 +888,13 @@
+             }
+         }
+ 
++        // Modified by Kachur VPN to keep per-app routing compatible with Android API 26–29.
+         public Builder parseExcludedApplications(final CharSequence apps) {
+-            return excludeApplications(List.of(Attribute.split(apps)));
++            return excludeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseIncludedApplications(final CharSequence apps) {
+-            return includeApplications(List.of(Attribute.split(apps)));
++            return includeApplications(Arrays.asList(Attribute.split(apps)));
+         }
+ 
+         public Builder parseListenPort(final String listenPort) throws BadConfigException {

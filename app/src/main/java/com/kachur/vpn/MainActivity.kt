@@ -30,6 +30,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var feedback: TextView
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
+    private lateinit var reconnectButton: Button
+    private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
     private val vpnObserver: () -> Unit = ::renderConnection
@@ -146,6 +148,17 @@ class MainActivity : ComponentActivity() {
         layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
         profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
         layout.addView(profileName)
+        layout.addView(Button(this).apply {
+            id = R.id.split_open_button
+            setText(R.string.split_title)
+            setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
+        })
+        reconnectButton = Button(this).apply {
+            id = R.id.main_split_reconnect_button
+            setText(R.string.split_apply_reconnect)
+            setOnClickListener { VpnConnection.reconnectWithSavedExclusions(applicationContext) }
+        }
+        layout.addView(reconnectButton)
         diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
         layout.addView(diagnostics)
         feedback = label("", 16f, Color.LTGRAY).apply {
@@ -204,6 +217,7 @@ class MainActivity : ComponentActivity() {
             // Registry results are delivered by this point when Android returns from the picker.
             session.finish(R.string.picker_no_callback)
         }
+        renderConnection()
     }
 
     override fun onPause() {
@@ -284,6 +298,11 @@ class MainActivity : ComponentActivity() {
         val blocked = connectionButtonBlockReason()
         importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
         connectButton.isEnabled = blocked == null
+        reconnectButton.visibility = if (VpnConnection.routingNeedsReconnect(splitSettings.excludedPackages())) {
+            View.VISIBLE
+        } else {
+            View.GONE
+        }
         connectButton.setText(when (phase) {
             VpnPhase.STARTING -> R.string.vpn_cancel_start
             VpnPhase.WAITING, VpnPhase.HANDSHAKE -> R.string.vpn_disconnect

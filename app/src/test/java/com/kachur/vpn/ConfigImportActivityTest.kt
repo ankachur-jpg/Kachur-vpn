@@ -397,7 +397,7 @@ class ConfigImportActivityTest {
             awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
             val id = checkNotNull(launchId.get())
             var cancellations = 0
-            assertTrue(VpnConnection.claim(id) { cancellations++ } === config)
+            assertTrue(VpnConnection.claim(id) { cancellations++ }?.profile === config)
             VpnConnection.foregroundReady(id)
             awaitDiagnostic(activity, R.string.vpn_service_foreground)
 
@@ -454,6 +454,83 @@ class ConfigImportActivityTest {
             } finally {
                 ShadowVpnService.reset()
                 VpnConnection.reset()
+            }
+        }
+    }
+
+    @Test
+    fun reconnectUsesNewExclusionsAfterTheOldServiceCloses() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val context = activity.applicationContext
+            val settings = SplitTunnelingSettings(context)
+            val packageName = "com.example.direct"
+            settings.setExcluded(packageName, false)
+            val awaiting = activity.findViewById<Button>(R.id.main_split_reconnect_button)
+            var stopped = 0
+            val config = AwgConfigParser.parse(validConfig())
+            VpnConnection.start(context, config)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val initial = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            try {
+                val before = checkNotNull(VpnConnection.claim(initial) { stopped++ })
+                assertFalse(packageName in before.exclusions)
+                VpnConnection.tunnelReady(initial)
+                VpnConnection.handshake(initial)
+                assertEquals(View.GONE, awaiting.visibility)
+
+                settings.setExcluded(packageName, true)
+                controller.pause().resume().postResume()
+                assertEquals(View.VISIBLE, awaiting.visibility)
+                awaiting.performClick()
+                assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
+                assertEquals(1, stopped)
+                assertNull(shadowOf(activity).nextStartedService)
+
+                VpnConnection.serviceClosed(initial, cleanupFailed = false)
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val restarted = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+                assertTrue(restarted > initial)
+                val after = checkNotNull(VpnConnection.claim(restarted) {})
+                assertTrue(after.profile === config)
+                assertTrue(packageName in after.exclusions)
+                VpnConnection.tunnelReady(restarted)
+                assertEquals(View.GONE, awaiting.visibility)
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(restarted, cleanupFailed = false)
+                assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            } finally {
+                settings.setExcluded(packageName, false)
+                VpnConnection.reset()
+            }
+        }
+    }
+
+    @Test
+    fun reconnectKeepsCurrentTunnelWhenAllAllowedAppsWouldBeExcluded() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val context = activity.applicationContext
+            val settings = SplitTunnelingSettings(context)
+            val packageName = "com.example.allowed"
+            settings.setExcluded(packageName, false)
+            val config = AwgConfigParser.parse(validConfig().replace("Jc = 4", "Jc = 4\nIncludedApplications = $packageName"))
+            VpnConnection.start(context, config)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val current = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            try {
+                var stopped = false
+                checkNotNull(VpnConnection.claim(current) { stopped = true })
+                VpnConnection.tunnelReady(current)
+                settings.setExcluded(packageName, true)
+                VpnConnection.reconnectWithSavedExclusions(context)
+                assertEquals(VpnPhase.WAITING, VpnConnection.phase)
+                assertFalse(stopped)
+                assertEquals(activity.getString(R.string.split_no_included_apps), text(activity, R.id.connection_status))
+            } finally {
+                settings.setExcluded(packageName, false)
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(current, cleanupFailed = false)
             }
         }
     }

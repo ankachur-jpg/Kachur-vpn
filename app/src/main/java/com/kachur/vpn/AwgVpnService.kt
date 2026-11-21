@@ -44,8 +44,8 @@ class AwgVpnService : VpnService() {
             if (id != attempt) VpnConnection.serviceFailed(id, R.string.vpn_service_busy)
             return START_NOT_STICKY
         }
-        val profile = VpnConnection.claim(id, ::requestStop)
-        if (profile == null) {
+        val options = VpnConnection.claim(id, ::requestStop)
+        if (options == null) {
             // A queued foreground request can arrive after reset. It owns no profile.
             serviceCalls.execute {
                 if (destroyed) return@execute
@@ -72,18 +72,18 @@ class AwgVpnService : VpnService() {
             main.post {
                 if (!closing) {
                     VpnConnection.foregroundReady(id)
-                    setup = backendWorker.submit { establish(id, profile) }
+                    setup = backendWorker.submit { establish(id, options) }
                 }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun establish(id: Long, profile: AwgConfig) {
+    private fun establish(id: Long, options: VpnStartOptions) {
         if (closing) return
         try {
             report(id, R.string.vpn_checking_profile)
-            val config = profile.toBackendConfig()
+            val config = options.profile.toBackendConfig(options.exclusions)
             if (closing) return
             report(id, R.string.vpn_loading_engine)
             val engine = GoBackend(applicationContext, this)
@@ -97,6 +97,8 @@ class AwgVpnService : VpnService() {
             if (!closing) {
                 polling = backendWorker.scheduleWithFixedDelay({ pollHandshake(id, engine) }, 1, 2, TimeUnit.SECONDS)
             }
+        } catch (_: NoIncludedVpnAppsException) {
+            fail(id, R.string.split_no_included_apps)
         } catch (error: BadConfigException) {
             fail(id, R.string.vpn_backend_invalid_profile, error.toSafeVpnError())
         } catch (error: BackendException) {

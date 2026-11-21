@@ -37,7 +37,8 @@ class AwgBackendConfigTest {
     }
 
     @Test
-    @Config(sdk = [28])
+    // API 28's RouteInfo uses Android-specific java.net fields that Robolectric's JVM lacks.
+    @Config(sdk = [32])
     fun legacyAndroidBuilderReceivesOnlyTheRemainingIpv4AndIpv6Routes() {
         val config = profile("", "AllowedIPs = 0.0.0.0/0, ::/0").toBackendConfig()
         val plan = checkNotNull(config.ipRoutePlan(setOf("192.0.2.0/24", "::fffe:0:0/96")))

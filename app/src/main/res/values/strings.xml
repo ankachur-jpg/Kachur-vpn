@@ -4,7 +4,8 @@
     <string name="vpn_disconnected">VPN не подключён</string>
     <string name="import_profile">Импортировать .conf</string>
     <string name="connect_vpn">Подключить VPN</string>
-    <string name="engine_unavailable">Для подключения нужен совместимый движок AmneziaWG 2.0.</string>
+    <string name="vpn_profile_required">VPN не подключён. Сначала импортируйте профиль .conf.</string>
+    <string name="engine_unavailable">VPN не подключён. В этой сборке отсутствует движок AmneziaWG 2.0.</string>
     <string name="picker_unavailable">Системный выбор файлов недоступен.</string>
     <string name="profile_imported">Профиль импортирован.</string>
     <string name="unnamed_profile">Импортированный профиль</string>

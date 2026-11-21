@@ -23,6 +23,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var feedback: TextView
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
+    private lateinit var connectionStatus: TextView
+    private var connectRequested = false
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         session.record(R.string.import_result_received)
@@ -45,6 +47,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         session = ViewModelProvider(this)[ImportSession::class.java]
+        connectRequested = savedInstanceState?.getBoolean(CONNECT_REQUESTED) == true
 
         if (!session.busy && savedInstanceState != null) {
             when {
@@ -63,7 +66,20 @@ class MainActivity : ComponentActivity() {
         layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
         profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
         layout.addView(profileName)
-        layout.addView(label(getString(R.string.vpn_disconnected), 18f, Color.LTGRAY))
+        connectionStatus = label("", 18f, Color.WHITE).apply {
+            id = R.id.connection_status
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        layout.addView(connectionStatus)
+        connectButton = Button(this).apply {
+            id = R.id.connect_vpn_button
+            setText(R.string.connect_vpn)
+            setOnClickListener {
+                connectRequested = true
+                renderConnectionStatus()
+            }
+        }
+        layout.addView(connectButton)
         diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
         layout.addView(diagnostics)
         feedback = label("", 16f, Color.LTGRAY).apply {
@@ -77,13 +93,6 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { selectConfig() }
         }
         layout.addView(importButton)
-        connectButton = Button(this).apply {
-            setText(R.string.connect_vpn)
-            setOnClickListener {
-                session.showMessage(R.string.engine_unavailable)
-            }
-        }
-        layout.addView(connectButton)
         setContentView(ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(Color.rgb(18, 24, 35))
@@ -114,6 +123,7 @@ class MainActivity : ComponentActivity() {
         // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
         outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
         outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
+        outState.putBoolean(CONNECT_REQUESTED, connectRequested)
     }
 
     override fun onDestroy() {
@@ -131,6 +141,7 @@ class MainActivity : ComponentActivity() {
 
     private fun selectConfig() {
         if (session.busy) return
+        connectRequested = false
         session.startPicker()
         val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -161,10 +172,21 @@ class MainActivity : ComponentActivity() {
         }
         feedback.visibility = if (feedback.text.isEmpty()) View.GONE else View.VISIBLE
         importButton.isEnabled = !session.busy
-        connectButton.isEnabled = session.profile != null && !session.busy
+        connectButton.isEnabled = !session.busy
+        renderConnectionStatus()
+    }
+
+    private fun renderConnectionStatus() {
+        val message = when {
+            !connectRequested -> R.string.vpn_disconnected
+            session.profile == null -> R.string.vpn_profile_required
+            else -> R.string.engine_unavailable
+        }
+        connectionStatus.setText(message)
     }
 
     private companion object {
+        const val CONNECT_REQUESTED = "connect_requested"
         const val PICKER_IN_PROGRESS = "config_picker_in_progress"
         const val IMPORT_IN_PROGRESS = "config_import_in_progress"
     }

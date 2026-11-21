@@ -680,7 +680,7 @@ class ConfigImportActivityTest {
     fun opensSavedProfileAndRequestsConsentBeforeAutomaticConnection() {
         val context = RuntimeEnvironment.getApplication()
         val profile = ImportedProfile("Test profile", AwgConfigParser.parse(validConfig()), "a".repeat(64))
-        context.localProfiles().save(profile)
+        context.localProfiles().append(listOf(profile))
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
             awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))
@@ -698,7 +698,7 @@ class ConfigImportActivityTest {
     @Config(shadows = [VpnConsentShadow::class])
     fun notificationStopsWithoutLaunchingAnActivityOrAutomaticallyStartingAgain() {
         val context = RuntimeEnvironment.getApplication()
-        context.localProfiles().save(ImportedProfile("Test profile", AwgConfigParser.parse(validConfig()), "a".repeat(64)))
+        context.localProfiles().append(listOf(ImportedProfile("Test profile", AwgConfigParser.parse(validConfig()), "a".repeat(64))))
         VpnConsentShadow.granted = true
         try {
             Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
@@ -731,6 +731,96 @@ class ConfigImportActivityTest {
                 awaitViewText(reopened.get(), R.id.profile_name, "Test profile")
                 assertEquals(VpnPhase.IDLE, VpnConnection.phase)
                 assertNull(shadowOf(reopened.get()).nextStartedService)
+            }
+        } finally {
+            VpnConsentShadow.granted = false
+            VpnConnection.reset()
+        }
+    }
+
+    @Test
+    fun pickerAddsSeveralProfilesAndLeavesAnExistingSelectionInPlace() {
+        val context = RuntimeEnvironment.getApplication()
+        VpnLaunchSettings(context).setEnabled(false)
+        val original = ImportedProfile("Existing", AwgConfigParser.parse(validConfig()), "a".repeat(64))
+        context.localProfiles().append(listOf(original))
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            awaitViewText(activity, R.id.profile_name, original.name)
+            registerDocument(activity, validConfig(), displayName = "Imported")
+
+            val request = launchPicker(activity)
+            assertTrue(request.intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false))
+            val good = ClipData.newRawUri("Config", document).apply {
+                addItem(ClipData.Item(document.buildUpon().appendPath("second").build()))
+            }
+            val result = Intent().apply { clipData = good }
+            assertTrue(activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK, result))
+            awaitFeedback(activity, R.string.profiles_imported)
+            val catalog = context.localProfiles().read().catalog
+            assertEquals(listOf("Existing", "Imported", "Imported"), catalog.entries.map { it.name })
+            assertEquals(3, catalog.entries.map { it.documentKey }.toSet().size)
+            assertEquals(original.documentKey, catalog.selectedId)
+
+            val badRequest = launchPicker(activity)
+            val bad = Intent().apply {
+                clipData = ClipData.newRawUri("Config", document).apply {
+                    addItem(ClipData.Item(Uri.parse("file:///unreadable.conf")))
+                }
+            }
+            assertTrue(activity.activityResultRegistry.dispatchResult(badRequest.requestCode, Activity.RESULT_OK, bad))
+            awaitFeedback(activity, R.string.unsupported_document_uri)
+            assertEquals(3, context.localProfiles().read().catalog.entries.size)
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun switchesToTheSelectedProfileOnlyAfterThePreviousServiceCloses() {
+        val context = RuntimeEnvironment.getApplication()
+        VpnLaunchSettings(context).setEnabled(false)
+        val original = ImportedProfile("Old server", AwgConfigParser.parse(validConfig()), "a".repeat(64))
+        val replacement = ImportedProfile("New server", AwgConfigParser.parse(validConfig() + "\nAllowedIPs = 0.0.0.0/0"), "b".repeat(64))
+        context.localProfiles().append(listOf(original, replacement))
+        val routing = SplitTunnelingSettings(context)
+        routing.setExcluded("com.example.direct", true)
+        routing.addIpRoutes(setOf("192.0.2.0/24"))
+        VpnProfileLabels(context).saveCountry(replacement.documentKey, "Швеция")
+        VpnConsentShadow.granted = true
+        try {
+            Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+                val activity = controller.get()
+                awaitViewText(activity, R.id.profile_name, original.name)
+                VpnConnection.start(context, original.config, profileId = original.documentKey, profileName = original.name)
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val old = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+                var stops = 0
+                checkNotNull(VpnConnection.claim(old) { stops++ })
+                VpnConnection.tunnelReady(old)
+                VpnConnection.handshake(old)
+
+                activity.findViewById<Button>(R.id.profiles_open).performClick()
+                val manager = shadowOf(activity).nextStartedActivityForResult
+                context.localProfiles().select(replacement.documentKey)
+                val outcome = Intent().putExtra(ProfilesActivity.PROFILE_ID, replacement.documentKey)
+                    .putExtra(ProfilesActivity.STOP_GENERATION, VpnConnection.manualStopGeneration)
+                assertTrue(activity.activityResultRegistry.dispatchResult(manager.requestCode, Activity.RESULT_OK, outcome))
+                awaitViewText(activity, R.id.connection_status, activity.getString(R.string.profiles_switching))
+                assertEquals(1, stops)
+                assertEquals(original.documentKey, VpnConnection.activeProfileId)
+                assertNull(shadowOf(activity).nextStartedService)
+
+                VpnConnection.serviceClosed(old, false)
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val next = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+                val applied = checkNotNull(VpnConnection.claim(next) {})
+                assertTrue(next > old)
+                assertEquals(replacement.documentKey, applied.profileId)
+                assertEquals("Швеция", applied.country)
+                assertEquals(setOf("com.example.direct"), applied.exclusions)
+                assertEquals(setOf("192.0.2.0/24"), applied.routing.ipRoutes)
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(next, false)
             }
         } finally {
             VpnConsentShadow.granted = false

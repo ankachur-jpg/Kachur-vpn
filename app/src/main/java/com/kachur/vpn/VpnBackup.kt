@@ -19,7 +19,7 @@ import javax.crypto.spec.SecretKeySpec
 internal class IpSourceBackup(val routes: Set<String>, val updatedAt: Long)
 
 internal class VpnBackup(
-    val profile: ImportedProfile?, val country: String?,
+    val profiles: ProfileCatalog, val countries: Map<String, String>,
     val apps: Set<String>, val manualRoutes: Set<String>,
     val sources: Map<IpUpdateSource, IpSourceBackup>, val schedule: IpUpdateSchedule,
     val autoConnect: Boolean, val autoPaused: Boolean,
@@ -32,10 +32,11 @@ internal object BackupCipher {
     const val MAX_FILE_BYTES = 6 * 1024 * 1024
     private const val SALT_SIZE = 16
     private const val NONCE_SIZE = 12
-    private val magic = "KACHUR\u0001".toByteArray(Charsets.US_ASCII)
+    private val legacyMagic = "KACHUR\u0001".toByteArray(Charsets.US_ASCII)
+    private val magic = "KACHUR\u0002".toByteArray(Charsets.US_ASCII)
     private val random = SecureRandom()
 
-    // Version 1 fixes the work factor. The header is authenticated along with the ciphertext.
+    // The versioned header is authenticated along with the ciphertext.
     fun encrypt(content: ByteArray, password: CharArray): ByteArray {
         val salt = ByteArray(SALT_SIZE).also(random::nextBytes)
         val nonce = ByteArray(NONCE_SIZE).also(random::nextBytes)
@@ -47,7 +48,9 @@ internal object BackupCipher {
     fun decrypt(bytes: ByteArray, password: CharArray): ByteArray {
         val headerSize = magic.size + SALT_SIZE + NONCE_SIZE
         if (bytes.size > MAX_FILE_BYTES) throw BackupFileException(R.string.backup_too_large)
-        if (bytes.size <= headerSize + 16 || !bytes.copyOfRange(0, magic.size).contentEquals(magic)) {
+        if (bytes.size <= headerSize + 16) throw BackupFileException(R.string.backup_format_error)
+        val fileMagic = bytes.copyOfRange(0, magic.size)
+        if (!fileMagic.contentEquals(magic) && !fileMagic.contentEquals(legacyMagic)) {
             throw BackupFileException(R.string.backup_format_error)
         }
         val salt = bytes.copyOfRange(magic.size, magic.size + SALT_SIZE)
@@ -78,8 +81,8 @@ internal object BackupJson {
     private val packageName = Regex("[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*")
 
     fun encode(backup: VpnBackup): ByteArray = JSONObject()
-        .put("profile", backup.profile?.let(ProfileJson::encode) ?: JSONObject.NULL)
-        .put("country", backup.country ?: JSONObject.NULL)
+        .put("profileSchema", 2).put("catalog", ProfileCatalogJson.encode(backup.profiles))
+        .put("countries", JSONObject().apply { backup.countries.forEach { (id, country) -> put(id, country) } })
         .put("apps", JSONArray(backup.apps)).put("manual", JSONArray(backup.manualRoutes))
         .put("schedule", backup.schedule.name)
         .put("autoConnect", backup.autoConnect).put("autoPaused", backup.autoPaused)
@@ -91,9 +94,23 @@ internal object BackupJson {
 
     fun decode(bytes: ByteArray): VpnBackup {
         val json = JSONObject(Charsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes)).toString())
-        val profile = if (json.isNull("profile")) null else ProfileJson.decode(json.getJSONObject("profile"))
-        val country = if (json.isNull("country")) null else json.get("country") as? String ?: invalid()
-        if ((profile == null) != (country == null) || (country != null && !VpnProfileLabels.validCountry(country))) invalid()
+        val (profiles, countries) = when {
+            !json.has("profileSchema") -> {
+                val profile = if (json.isNull("profile")) null else ProfileJson.decode(json.getJSONObject("profile"))
+                val country = if (json.isNull("country")) null else json.get("country") as? String ?: invalid()
+                if ((profile == null) != (country == null)) invalid()
+                val names = if (profile != null && country != null) mapOf(profile.documentKey to country) else emptyMap()
+                ProfileCatalog.legacy(profile) to names
+            }
+            json.get("profileSchema") == 2 -> {
+                val catalog = ProfileCatalogJson.decode(json.getJSONObject("catalog"))
+                val values = json.getJSONObject("countries")
+                if (values.length() != catalog.entries.size) invalid()
+                catalog to catalog.entries.associate { it.documentKey to (values.get(it.documentKey) as? String ?: invalid()) }
+            }
+            else -> invalid()
+        }
+        if (!countries.values.all(VpnProfileLabels.Companion::validCountry)) invalid()
         val apps = strings(json.getJSONArray("apps"), 4096) { if (it.length <= 255 && packageName.matches(it)) it else invalid() }
         val manual = routes(json.getJSONArray("manual"), IpRouteImport.MAX_ENTRIES)
         val sources = linkedMapOf<IpUpdateSource, IpSourceBackup>()
@@ -118,7 +135,7 @@ internal object BackupJson {
             }
         }
         val schedule = IpUpdateSchedule.entries.firstOrNull { it.name == json.get("schedule") } ?: invalid()
-        return VpnBackup(profile, country, apps, manual, sources, schedule,
+        return VpnBackup(profiles, countries, apps, manual, sources, schedule,
             json.get("autoConnect") as? Boolean ?: invalid(), json.get("autoPaused") as? Boolean ?: invalid())
     }
 
@@ -140,16 +157,17 @@ internal class VpnBackupStore(private val context: Context) {
     private val profiles = context.localProfiles()
 
     fun snapshot(): VpnBackup = synchronized(SplitTunnelingSettings.ipSettingsLock) {
-        val profile = profiles.load()
+        val catalog = profiles.read().catalog
+        val labels = VpnProfileLabels(context)
         val config = feeds.configuration()
         val launch = VpnLaunchSettings(context)
-        VpnBackup(profile, profile?.let { VpnProfileLabels(context).country(it.documentKey) }, routing.excludedPackages(),
+        VpnBackup(catalog, catalog.entries.associate { it.documentKey to labels.country(it.documentKey) }, routing.excludedPackages(),
             routing.manualIpRoutes(), config.sources.associateWith { IpSourceBackup(feeds.routesFor(it), feeds.timeFor(it)) },
             config.schedule, launch.enabled, launch.paused)
     }
 
     fun restore(backup: VpnBackup): Boolean {
-        val sealed = profiles.seal(backup.profile)
+        val sealed = profiles.seal(backup.profiles)
         synchronized(SplitTunnelingSettings.ipSettingsLock) {
             val prefs = routing.preferences
             val previous = prefs.all
@@ -158,8 +176,7 @@ internal class VpnBackupStore(private val context: Context) {
                 .putBoolean(VpnLaunchSettings.PAUSED, backup.autoPaused)
             routing.putRules(writer, backup.apps, backup.manualRoutes)
             feeds.putRestoredSources(writer, backup.schedule, backup.sources)
-            val profile = backup.profile
-            if (profile != null && backup.country != null) VpnProfileLabels.putCountry(writer, profile.documentKey, backup.country)
+            backup.countries.forEach { (id, country) -> VpnProfileLabels.putCountry(writer, id, country) }
             if (!writer.commit()) {
                 val rollback = prefs.edit().clear()
                 previous.forEach { (key, value) -> putValue(rollback, key, value) }

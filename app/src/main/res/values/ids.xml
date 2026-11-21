@@ -1,5 +1,8 @@
 <resources>
     <item type="id" name="profile_name" />
+    <item type="id" name="profiles_open" />
+    <item type="id" name="profiles_import" />
+    <item type="id" name="profiles_list" />
     <item type="id" name="import_feedback" />
     <item type="id" name="import_profile_button" />
     <item type="id" name="import_diagnostics" />

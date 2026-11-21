@@ -262,6 +262,25 @@ class ConfigImportActivityTest {
     }
 
     @Test
+    fun reopenedActivityKeepsReceivingUpdatesWhenPreviousActivityStops() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { first ->
+            Robolectric.buildActivity(MainActivity::class.java).setup().use { second ->
+                first.pause().stop()
+                val reopened = second.get()
+                try {
+                    VpnConnection.publish(VpnPhase.STARTING, R.string.vpn_service_started)
+                    assertEquals(reopened.getString(R.string.vpn_service_started), text(reopened, R.id.connection_status))
+                    VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_start_error)
+                    assertEquals(reopened.getString(R.string.vpn_start_error), text(reopened, R.id.connection_status))
+                    assertTrue(reopened.findViewById<Button>(R.id.connect_vpn_button).isEnabled)
+                } finally {
+                    VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected)
+                }
+            }
+        }
+    }
+
+    @Test
     fun serviceLaunchRejectionReturnsToIdleAndDropsPendingProfile() {
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()

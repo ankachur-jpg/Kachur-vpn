@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectButton: Button
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
+    private val vpnObserver: () -> Unit = ::render
     private var resumed = false
     private var permissionPending = false
     private var permissionMessage: Int? = null
@@ -128,12 +129,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        VpnConnection.onChange = ::render
+        VpnConnection.observe(vpnObserver)
         render()
     }
 
     override fun onStop() {
-        VpnConnection.onChange = null
+        VpnConnection.removeObserver(vpnObserver)
         super.onStop()
     }
 

@@ -27,7 +27,7 @@ internal object VpnConnection {
         private set
     var message = R.string.vpn_disconnected
         private set
-    var onChange: (() -> Unit)? = null
+    private val observers = mutableSetOf<() -> Unit>()
     private var pending: AwgConfig? = null
     private var nextAttempt = 0L
     private var attempt = 0L
@@ -36,10 +36,18 @@ internal object VpnConnection {
     private val history = mutableListOf<Int>()
     val stages: List<Int> get() = history
 
+    fun observe(observer: () -> Unit) {
+        observers.add(observer)
+    }
+
+    fun removeObserver(observer: () -> Unit) {
+        observers.remove(observer)
+    }
+
     fun publish(phase: VpnPhase, message: Int) {
         this.phase = phase
         this.message = message
-        onChange?.invoke()
+        observers.toList().forEach { it() }
     }
 
     fun start(context: Context, config: AwgConfig) {

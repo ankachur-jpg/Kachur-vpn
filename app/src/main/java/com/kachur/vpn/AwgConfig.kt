@@ -94,7 +94,8 @@ internal object AwgConfigParser {
         }
 
         val interfaceSection = device ?: throw ConfigFormatException()
-        validateInterface(interfaceSection)
+        val interfaceFields = interfaceSection.fields()
+        validateInterface(interfaceSection, interfaceFields)
         if (peers.isEmpty()) throw ConfigFormatException()
         val publicKeys = mutableSetOf<String>()
         for (peer in peers) {
@@ -102,7 +103,7 @@ internal object AwgConfigParser {
             if (!publicKeys.add(publicKey)) throw ConfigFormatException(peer.lines["publickey"])
         }
         return AwgConfig(
-            ConfigSection(interfaceSection.fields().filterNot { (field, value) ->
+            ConfigSection(interfaceFields.filterNot { (field, value) ->
                 field in optionalEmptyFields && value.isEmpty()
             }),
             peers.map { ConfigSection(it.fields()) },
@@ -143,9 +144,13 @@ internal object AwgConfigParser {
         else -> null
     }
 
-    private fun validateInterface(section: SectionBuilder) {
-        val values = section.fields()
+    private fun validateInterface(section: SectionBuilder, values: Map<String, String>) {
         if ("privatekey" !in values) throw ConfigFormatException(section.startLine)
+        if ("includedapplications" in values && "excludedapplications" in values) {
+            val includedLine = section.lines.getValue("includedapplications")
+            val excludedLine = section.lines.getValue("excludedapplications")
+            throw ConfigFormatException(maxOf(includedLine, excludedLine))
+        }
         val min = values["jmin"]?.toLong() ?: 0
         val max = values["jmax"]?.toLong() ?: 0
         if (min > max) throw ConfigFormatException(section.lines["jmin"])

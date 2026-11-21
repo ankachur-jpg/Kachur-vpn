@@ -84,9 +84,11 @@ class AwgVpnService : VpnService() {
         try {
             report(id, R.string.vpn_checking_profile)
             val config = options.profile.toBackendConfig(options.exclusions)
+            val routePlan = options.routePlan ?: config.ipRoutePlan(options.routing.ipRoutes)
             if (closing) return
             report(id, R.string.vpn_loading_engine)
-            val engine = GoBackend(applicationContext, this)
+            val engine = if (routePlan == null) GoBackend(applicationContext, this)
+                else GoBackend(applicationContext, this, routePlan::configure)
             backend = engine
             if (closing) return
             report(id, R.string.vpn_starting)
@@ -97,6 +99,8 @@ class AwgVpnService : VpnService() {
             if (!closing) {
                 polling = backendWorker.scheduleWithFixedDelay({ pollHandshake(id, engine) }, 1, 2, TimeUnit.SECONDS)
             }
+        } catch (_: TooManyVpnRoutesException) {
+            fail(id, R.string.ip_vpn_route_limit)
         } catch (_: NoIncludedVpnAppsException) {
             fail(id, R.string.split_no_included_apps)
         } catch (error: BadConfigException) {

@@ -535,6 +535,84 @@ class ConfigImportActivityTest {
         }
     }
 
+    @Test
+    fun reconnectChecksIpRulesAndUsesThemAlongsideAppRulesAfterOldServiceCloses() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val context = activity.applicationContext
+            val settings = SplitTunnelingSettings(context)
+            val config = AwgConfigParser.parse(validConfig() + "\nAllowedIPs = 0.0.0.0/0")
+            VpnConnection.start(context, config)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val initial = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            var stopped = 0
+            checkNotNull(VpnConnection.claim(initial) { stopped++ })
+            VpnConnection.tunnelReady(initial)
+            val routes = setOf("192.0.2.0/24")
+            val app = "com.example.direct"
+            settings.addIpRoutes(routes)
+            settings.setExcluded(app, true)
+            controller.pause().resume().postResume()
+            val reconnect = activity.findViewById<Button>(R.id.main_split_reconnect_button)
+            assertEquals(View.VISIBLE, reconnect.visibility)
+            reconnect.performClick()
+            assertEquals(VpnPhase.WAITING, VpnConnection.phase)
+            assertFalse(reconnect.isEnabled)
+            assertEquals(0, stopped)
+
+            awaitViewText(activity, R.id.connection_status, activity.getString(R.string.split_reconnecting))
+            assertEquals(VpnPhase.STOPPING, VpnConnection.phase)
+            assertEquals(1, stopped)
+            assertNull(shadowOf(activity).nextStartedService)
+            VpnConnection.serviceClosed(initial, cleanupFailed = false)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val restarted = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            val options = checkNotNull(VpnConnection.claim(restarted) {})
+            try {
+                assertTrue(restarted > initial)
+                assertEquals(VpnRoutingSettings(setOf(app), routes), options.routing)
+                assertEquals(listOf(IpRoutePrefix.parse("192.0.2.0/24")), options.routePlan?.direct)
+                assertTrue(options.profile === config)
+                VpnConnection.tunnelReady(restarted)
+                assertEquals(View.GONE, reconnect.visibility)
+            } finally {
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(restarted, cleanupFailed = false)
+            }
+        }
+    }
+
+    @Test
+    fun oversizedIpRulesLeaveTheActiveTunnelRunningAndAllowAnotherAttempt() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            val context = activity.applicationContext
+            val config = AwgConfigParser.parse(validConfig() + "\nAllowedIPs = 0.0.0.0/0")
+            VpnConnection.start(context, config)
+            awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+            val initial = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+            var stopped = false
+            checkNotNull(VpnConnection.claim(initial) { stopped = true })
+            VpnConnection.tunnelReady(initial)
+            try {
+                val routes = (0 until IpRoutePlan.MAX_ROUTES).map { i -> "198.0.${i / 128}.${(i % 128) * 2}/32" }.toSet()
+                SplitTunnelingSettings(context).addIpRoutes(routes)
+                controller.pause().resume().postResume()
+                val reconnect = activity.findViewById<Button>(R.id.main_split_reconnect_button)
+                reconnect.performClick()
+                awaitDiagnostic(activity, R.string.ip_vpn_route_limit)
+                assertEquals(VpnPhase.WAITING, VpnConnection.phase)
+                assertFalse(stopped)
+                assertNull(shadowOf(activity).nextStartedService)
+                assertTrue(reconnect.isEnabled)
+                assertEquals(View.VISIBLE, reconnect.visibility)
+            } finally {
+                VpnConnection.stop()
+                VpnConnection.serviceClosed(initial, cleanupFailed = false)
+            }
+        }
+    }
+
     private fun requestVpnPermission(activity: MainActivity): ShadowActivity.IntentForResult {
         assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).performClick())
         awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))

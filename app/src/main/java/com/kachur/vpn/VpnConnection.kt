@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import org.amnezia.awg.config.BadConfigException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 
@@ -15,7 +16,13 @@ internal enum class VpnPhase(val label: Int) {
     STOPPING(R.string.vpn_phase_stopping),
 }
 
-internal class VpnStartOptions(val profile: AwgConfig, val exclusions: Set<String>)
+internal class VpnStartOptions(
+    val profile: AwgConfig,
+    val routing: VpnRoutingSettings,
+    val routePlan: IpRoutePlan? = null,
+) {
+    val exclusions: Set<String> get() = routing.apps
+}
 
 // State is owned by the main thread. Only the attempt ID crosses the service Intent.
 internal object VpnConnection {
@@ -42,13 +49,18 @@ internal object VpnConnection {
     private val observers = mutableSetOf<() -> Unit>()
     private var nextAttempt = 0L
     private var active: Attempt? = null
+    val checkingRoutes: Boolean get() = active?.routingCheck != null
+
+    private class RoutingCheck(var worker: Future<*>? = null)
+    private class Restart(val context: Context, val options: VpnStartOptions)
 
     private class Attempt(val id: Long, var options: VpnStartOptions?) {
         var request: Future<*>? = null
         var deadline: Runnable? = null
         var cancelService: (() -> Unit)? = null
         var completionMessage = R.string.vpn_disconnected
-        var reconnectContext: Context? = null
+        var routingCheck: RoutingCheck? = null
+        var restart: Restart? = null
     }
 
     fun observe(observer: () -> Unit) {
@@ -73,9 +85,12 @@ internal object VpnConnection {
     }
 
     fun start(context: Context, config: AwgConfig) {
+        start(context, VpnStartOptions(config, SplitTunnelingSettings(context).snapshot()))
+    }
+
+    private fun start(context: Context, options: VpnStartOptions) {
         if (phase != VpnPhase.IDLE) return
-        val exclusions = SplitTunnelingSettings(context).excludedPackages()
-        val attempt = Attempt(++nextAttempt, VpnStartOptions(config, exclusions))
+        val attempt = Attempt(++nextAttempt, options)
         active = attempt
         serviceLaunch = R.string.vpn_requesting_service
         serviceResponse = R.string.vpn_service_awaiting_reply
@@ -159,7 +174,7 @@ internal object VpnConnection {
         val attempt = active?.takeIf { it.id == id } ?: return
         if (phase != VpnPhase.STOPPING) {
             stopAttempt(attempt, message, error)
-        } else if (attempt.reconnectContext != null && message == R.string.vpn_permission_revoked) {
+        } else if (attempt.restart != null && message == R.string.vpn_permission_revoked) {
             cancelReconnect(attempt, message)
             publish(VpnPhase.STOPPING, message, error)
         }
@@ -183,28 +198,69 @@ internal object VpnConnection {
             phase == VpnPhase.STARTING -> R.string.vpn_service_ended_during_start
             else -> null
         }
-        val reconnectContext = attempt.reconnectContext.takeIf { error == null }
-        val profile = attempt.options?.profile
+        val restart = attempt.restart.takeIf { error == null }
         finish(attempt, error ?: attempt.completionMessage, error?.let { VpnError(it) })
-        if (reconnectContext != null && profile != null) start(reconnectContext, profile)
+        if (restart != null) start(restart.context, restart.options)
     }
 
-    fun routingNeedsReconnect(exclusions: Set<String>): Boolean {
+    fun routingNeedsReconnect(context: Context): Boolean {
         val options = active?.options ?: return false
-        return (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE) && options.exclusions != exclusions
+        return (phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE) &&
+            options.routing != SplitTunnelingSettings(context).snapshot()
     }
 
     fun reconnectWithSavedExclusions(context: Context) {
-        val exclusions = SplitTunnelingSettings(context).excludedPackages()
-        if (!routingNeedsReconnect(exclusions)) return
+        if (checkingRoutes || !routingNeedsReconnect(context)) return
         val attempt = checkNotNull(active)
         val options = checkNotNull(attempt.options)
-        if (options.profile.includedAppsAfterExclusions(exclusions)?.isEmpty() == true) {
+        val routing = SplitTunnelingSettings(context).snapshot()
+        if (options.profile.includedAppsAfterExclusions(routing.apps)?.isEmpty() == true) {
             publish(phase, R.string.split_no_included_apps, VpnError(R.string.split_no_included_apps))
             return
         }
-        attempt.reconnectContext = context.applicationContext
-        stopAttempt(attempt, R.string.vpn_disconnected)
+        val appContext = context.applicationContext
+        if (routing.ipRoutes.isEmpty()) {
+            attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing))
+            stopAttempt(attempt, R.string.vpn_disconnected)
+            return
+        }
+
+        // Validate the replacement before stopping the live tunnel. Only this snapshot is applied.
+        val check = RoutingCheck()
+        attempt.routingCheck = check
+        setDeadline(attempt, ROUTE_CHECK_TIMEOUT_MS) {
+            cancelRoutingCheck(attempt)
+            publish(phase, R.string.ip_vpn_route_timeout, VpnError(R.string.ip_vpn_route_timeout))
+        }
+        check.worker = systemCalls.submit {
+            var error: VpnError? = null
+            val plan = try {
+                options.profile.toBackendConfig(routing.apps).ipRoutePlan(routing.ipRoutes)
+            } catch (_: TooManyVpnRoutesException) {
+                error = VpnError(R.string.ip_vpn_route_limit)
+                null
+            } catch (invalid: BadConfigException) {
+                error = invalid.toSafeVpnError()
+                null
+            } catch (_: Exception) {
+                error = VpnError(R.string.ip_vpn_route_error)
+                null
+            }
+            main.post {
+                if (active !== attempt || attempt.routingCheck !== check) return@post
+                attempt.routingCheck = null
+                clearDeadline(attempt)
+                if (error != null) {
+                    publish(phase, R.string.ip_vpn_route_error, error)
+                } else if (routing != SplitTunnelingSettings(appContext).snapshot()) {
+                    publish(phase, R.string.ip_vpn_route_changed)
+                } else {
+                    attempt.restart = Restart(appContext, VpnStartOptions(options.profile, routing, plan))
+                    stopAttempt(attempt, R.string.vpn_disconnected)
+                }
+            }
+        }
+        publish(phase, R.string.ip_vpn_route_checking)
     }
 
     fun stop() {
@@ -230,7 +286,8 @@ internal object VpnConnection {
     }
 
     private fun stopAttempt(attempt: Attempt, message: Int, error: VpnError? = null) {
-        if (attempt.reconnectContext == null) attempt.options = null
+        cancelRoutingCheck(attempt)
+        attempt.options = null
         attempt.request?.cancel(true)
         attempt.request = null
         val cancel = attempt.cancelService
@@ -247,7 +304,7 @@ internal object VpnConnection {
         val status = when {
             error != null -> message
             message == R.string.vpn_reset_done -> R.string.vpn_reset_stopping
-            attempt.reconnectContext != null -> R.string.split_reconnecting
+            attempt.restart != null -> R.string.split_reconnecting
             else -> R.string.vpn_stopping
         }
         publish(VpnPhase.STOPPING, status, error)
@@ -260,17 +317,22 @@ internal object VpnConnection {
 
     private fun finish(attempt: Attempt, message: Int, error: VpnError? = null) {
         clearDeadline(attempt)
+        cancelRoutingCheck(attempt)
         attempt.options = null
-        attempt.reconnectContext = null
+        attempt.restart = null
         attempt.cancelService = null
         active = null
         publish(VpnPhase.IDLE, message, error)
     }
 
     private fun cancelReconnect(attempt: Attempt, message: Int) {
-        attempt.reconnectContext = null
-        attempt.options = null
+        attempt.restart = null
         attempt.completionMessage = message
+    }
+
+    private fun cancelRoutingCheck(attempt: Attempt) {
+        attempt.routingCheck?.worker?.cancel(true)
+        attempt.routingCheck = null
     }
 
     private fun setDeadline(attempt: Attempt, timeoutMs: Long, action: () -> Unit) {
@@ -288,4 +350,5 @@ internal object VpnConnection {
     const val EXTRA_ATTEMPT = "vpn_attempt"
     const val STARTUP_TIMEOUT_MS = 30_000L
     const val STOP_TIMEOUT_MS = 15_000L
+    private const val ROUTE_CHECK_TIMEOUT_MS = 10_000L
 }

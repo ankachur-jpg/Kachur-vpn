@@ -1,5 +1,8 @@
 package com.kachur.vpn
 
+import android.net.IpPrefix
+import android.net.RouteInfo
+import android.net.VpnService
 import org.amnezia.awg.config.BadConfigException
 import org.amnezia.awg.config.BadConfigException.Reason
 import org.amnezia.awg.config.Config as EngineConfig
@@ -12,11 +15,48 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class AwgBackendConfigTest {
+    @Test
+    fun ipPlanUsesAnAndroidThrowRouteAndKeepsAwgAndAppRules() {
+        val config = profile("", "AllowedIPs = 0.0.0.0/0, 192.0.2.64/26")
+            .toBackendConfig(setOf("com.example.direct"))
+        val builder = VpnService().Builder()
+        checkNotNull(config.ipRoutePlan(setOf("192.0.2.0/24"))).configure(builder)
+        val routes = ReflectionHelpers.getField<List<RouteInfo>>(builder, "mRoutes")
+        val destination = IpPrefix(checkNotNull(IpRoutePrefix.parse("192.0.2.0/24")).address, 24)
+        val excluded = routes.single { it.destination == destination }
+        assertEquals(9, ReflectionHelpers.callInstanceMethod<Int>(excluded, "getType")) // RTN_THROW
+        assertEquals(2, routes.size)
+        assertEquals(2, config.peers.single().allowedIps.size)
+        assertEquals(setOf("com.example.direct"), config.getInterface().excludedApplications)
+    }
+
+    @Test
+    // API 28's RouteInfo uses Android-specific java.net fields that Robolectric's JVM lacks.
+    @Config(sdk = [32])
+    fun legacyAndroidBuilderReceivesOnlyTheRemainingIpv4AndIpv6Routes() {
+        val config = profile("", "AllowedIPs = 0.0.0.0/0, ::/0").toBackendConfig()
+        val plan = checkNotNull(config.ipRoutePlan(setOf("192.0.2.0/24", "::fffe:0:0/96")))
+        val builder = VpnService().Builder()
+        plan.configure(builder)
+        val routes = ReflectionHelpers.getField<List<RouteInfo>>(builder, "mRoutes")
+        fun includes(address: String): Boolean {
+            val host = checkNotNull(IpRoutePrefix.parse(address)).address
+            return routes.any { it.destination.contains(host) }
+        }
+        assertTrue(plan.direct.isEmpty())
+        assertFalse(includes("192.0.2.7"))
+        assertTrue(includes("198.51.100.7"))
+        assertFalse(includes("::fffe:0:7"))
+        assertTrue(includes("2001:db8::7"))
+        assertFalse(routes.any { it.destination.prefixLength > 32 && it.destination.address.address.size == 4 })
+    }
+
     @Test
     fun forwardsAllAwg2OptionsAndNormalizesHeaderRangesForGo() {
         val config = profile(

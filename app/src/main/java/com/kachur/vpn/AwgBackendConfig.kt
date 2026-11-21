@@ -1,6 +1,9 @@
 package com.kachur.vpn
 
 import android.content.Context
+import android.net.IpPrefix
+import android.net.VpnService
+import android.os.Build
 import androidx.annotation.StringRes
 import org.amnezia.awg.config.BadConfigException
 import org.amnezia.awg.config.BadConfigException.Location
@@ -13,6 +16,24 @@ internal fun AwgConfig.includedAppsAfterExclusions(exclusions: Set<String>): Lis
     interfaceSection["IncludedApplications"]?.split(',')?.map { it.trim() }?.filterNot(exclusions::contains)
 
 internal class NoIncludedVpnAppsException : Exception("No applications remain in the VPN allowlist")
+
+internal fun Config.ipRoutePlan(routes: Set<String>): IpRoutePlan? {
+    if (routes.isEmpty()) return null
+    return IpRoutePlan.build(
+        peers.flatMap { peer -> peer.allowedIps.map { IpRoutePrefix.from(it.address.address, it.mask) } },
+        routes.map { checkNotNull(IpRoutePrefix.parse(it)) },
+        nativeExclusion = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+    )
+}
+
+internal fun IpRoutePlan.configure(builder: VpnService.Builder) {
+    for (route in tunnel) builder.addRoute(route.address, route.length)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        for (route in direct) builder.excludeRoute(IpPrefix(route.address, route.length))
+    } else {
+        check(direct.isEmpty())
+    }
+}
 
 internal fun AwgConfig.toBackendConfig(exclusions: Set<String> = emptySet()): Config {
     val included = includedAppsAfterExclusions(exclusions)

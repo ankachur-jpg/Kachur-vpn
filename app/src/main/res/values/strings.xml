@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">Kachur VPN</string>
+    <string name="no_profile">Профиль не импортирован</string>
+    <string name="vpn_disconnected">VPN не подключён</string>
+    <string name="import_profile">Импортировать .conf</string>
+    <string name="connect_vpn">Подключить VPN</string>
+    <string name="engine_unavailable">Для подключения нужен совместимый движок AmneziaWG 2.0.</string>
+    <string name="picker_unavailable">Системный выбор файлов недоступен.</string>
+    <string name="importing_profile">Импорт профиля…</string>
+    <string name="profile_imported">Профиль импортирован.</string>
+    <string name="conf_extension_required">Выберите файл с расширением .conf.</string>
+    <string name="invalid_config">Недопустимая конфигурация VPN.</string>
+    <string name="invalid_config_line">Недопустимая конфигурация VPN, строка %1$d.</string>
+    <string name="cannot_read_config">Не удалось прочитать файл конфигурации.</string>
+</resources>

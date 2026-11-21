@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
@@ -25,6 +26,7 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowActivity
 import org.robolectric.shadows.ShadowContentResolver
 
 @RunWith(RobolectricTestRunner::class)
@@ -98,7 +100,7 @@ class ConfigImportActivityTest {
         assertTrue(activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_OK, Intent().setData(document)))
     }
 
-    private fun launchPicker(activity: MainActivity): org.robolectric.shadows.ShadowActivity.IntentForResult {
+    private fun launchPicker(activity: MainActivity): ShadowActivity.IntentForResult {
         activity.findViewById<Button>(R.id.import_profile_button).performClick()
         return shadowOf(activity).nextStartedActivityForResult
     }
@@ -128,7 +130,7 @@ class ConfigImportActivityTest {
         openFails: Boolean = false,
     ) {
         val fixture = File.createTempFile("import-test-", ".conf", activity.cacheDir).apply { writeText(content) }
-        ShadowContentResolver.registerProviderInternal(AUTHORITY, object : ContentProvider() {
+        val provider = object : ContentProvider() {
             override fun onCreate() = true
             override fun getType(uri: Uri) = "application/octet-stream"
 
@@ -152,7 +154,12 @@ class ConfigImportActivityTest {
             override fun insert(uri: Uri, values: ContentValues?): Uri? = null
             override fun delete(uri: Uri, selection: String?, selectionArgs: Array<out String>?) = 0
             override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?) = 0
+        }
+        provider.attachInfo(activity.applicationContext, ProviderInfo().apply {
+            authority = AUTHORITY
+            applicationInfo = activity.applicationInfo
         })
+        ShadowContentResolver.registerProviderInternal(AUTHORITY, provider)
     }
 
     private fun validConfig(): String {

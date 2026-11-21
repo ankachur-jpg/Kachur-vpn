@@ -8,8 +8,12 @@
     <string name="picker_unavailable">Системный выбор файлов недоступен.</string>
     <string name="importing_profile">Импорт профиля…</string>
     <string name="profile_imported">Профиль импортирован.</string>
-    <string name="conf_extension_required">Выберите файл с расширением .conf.</string>
+    <string name="unnamed_profile">Импортированный профиль</string>
+    <string name="no_document_returned">Файловый менеджер не передал файл. Попробуйте выбрать его ещё раз.</string>
+    <string name="unsupported_document_uri">Не удалось получить доступ к выбранному документу. Выберите файл через системный файловый менеджер.</string>
+    <string name="invalid_config_encoding">Не удалось прочитать текст конфигурации. Выберите файл .conf в кодировке UTF-8.</string>
+    <string name="unsupported_config_option">Неподдерживаемый параметр конфигурации в строке %1$d.</string>
     <string name="invalid_config">Недопустимая конфигурация VPN.</string>
     <string name="invalid_config_line">Недопустимая конфигурация VPN, строка %1$d.</string>
-    <string name="cannot_read_config">Не удалось прочитать файл конфигурации.</string>
+    <string name="cannot_read_config">Не удалось открыть или прочитать выбранный файл. Проверьте, что он доступен, и выберите его снова.</string>
 </resources>

@@ -14,6 +14,7 @@ import org.amnezia.awg.backend.GoBackend
 import org.amnezia.awg.backend.Tunnel
 import org.amnezia.awg.config.BadConfigException
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 internal enum class VpnPhase {
@@ -64,6 +65,7 @@ class AwgVpnService : VpnService() {
         override fun onStateChange(state: Tunnel.State) = Unit
     }
     private var backend: GoBackend? = null
+    private var setup: Future<*>? = null
     @Volatile private var closing = false
     private var started = false
     private var finalMessage = R.string.vpn_disconnected
@@ -82,7 +84,7 @@ class AwgVpnService : VpnService() {
         started = true
         try {
             startForeground(NOTIFICATION_ID, notification())
-            worker.execute { establish(config) }
+            setup = worker.submit { establish(config) }
         } catch (_: RuntimeException) {
             finalMessage = R.string.vpn_start_error
             stopSelf()
@@ -94,6 +96,7 @@ class AwgVpnService : VpnService() {
         if (closing) return
         try {
             val config = profile.toBackendConfig()
+            if (closing) return
             val engine = GoBackend(applicationContext, this)
             backend = engine
             check(engine.setState(tunnel, Tunnel.State.UP, config) == Tunnel.State.UP)
@@ -158,6 +161,8 @@ class AwgVpnService : VpnService() {
 
     override fun onDestroy() {
         closing = true
+        setup?.cancel(true)
+        setup = null
         // Serialize teardown with setup and statistics so no JNI call can race with closing the TUN.
         worker.execute {
             var message = finalMessage
@@ -180,7 +185,7 @@ class AwgVpnService : VpnService() {
     }
 
     private fun notification(): Notification {
-        val manager = getSystemService(NotificationManager::class.java)
+        val manager = checkNotNull(getSystemService(NotificationManager::class.java))
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.app_name), NotificationManager.IMPORTANCE_LOW),
         )

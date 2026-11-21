@@ -3,12 +3,14 @@ package com.kachur.vpn
 import android.app.Activity
 import android.content.ClipData
 import android.content.ContentProvider
+import android.content.Context
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.net.VpnService
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
@@ -26,6 +28,8 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.shadows.ShadowActivity
 import org.robolectric.shadows.ShadowContentResolver
 
@@ -174,6 +178,41 @@ class ConfigImportActivityTest {
             } finally {
                 VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected)
             }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun deniedSystemConsentDoesNotStartVpn() {
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            registerDocument(activity, validConfig())
+            deliverDocument(activity)
+            awaitFeedback(activity, R.string.profile_imported)
+
+            val connect = activity.findViewById<Button>(R.id.connect_vpn_button)
+            assertTrue(connect.performClick())
+            val consent = shadowOf(activity).nextStartedActivityForResult
+            assertEquals(VpnConsentShadow.ACTION, consent.intent.action)
+            assertEquals(activity.getString(R.string.vpn_waiting_permission), text(activity, R.id.connection_status))
+            assertFalse(connect.isEnabled)
+
+            assertTrue(activity.activityResultRegistry.dispatchResult(consent.requestCode, Activity.RESULT_CANCELED, null))
+            assertEquals(activity.getString(R.string.vpn_permission_denied), text(activity, R.id.connection_status))
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+            assertTrue(connect.isEnabled)
+        }
+    }
+
+    @Implements(VpnService::class)
+    class VpnConsentShadow {
+        companion object {
+            const val ACTION = "com.kachur.vpn.test.CONSENT"
+
+            @JvmStatic
+            @Implementation
+            @Suppress("UNUSED_PARAMETER")
+            fun prepare(context: Context): Intent = Intent(ACTION)
         }
     }
 

@@ -168,18 +168,25 @@
              builder.setSession(tunnel.getName());
  
              for (final String excludedApplication : config.getInterface().getExcludedApplications())
-@@ -423,27 +355,28 @@
+@@ -423,27 +355,35 @@
              if (currentTunnelHandle < 0)
                  throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE, currentTunnelHandle);
  
-+            final int socketV4 = awgGetSocketV4(currentTunnelHandle);
-+            final int socketV6 = awgGetSocketV6(currentTunnelHandle);
-+            if ((socketV4 < 0 && socketV6 < 0)
-+                    || (socketV4 >= 0 && !service.protect(socketV4))
-+                    || (socketV6 >= 0 && !service.protect(socketV6))) {
-+                awgTurnOff(currentTunnelHandle);
-+                currentTunnelHandle = -1;
-+                throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE);
++            boolean protectedSockets = false;
++            try {
++                final int socketV4 = awgGetSocketV4(currentTunnelHandle);
++                final int socketV6 = awgGetSocketV6(currentTunnelHandle);
++                protectedSockets = (socketV4 >= 0 || socketV6 >= 0)
++                        && (socketV4 < 0 || service.protect(socketV4))
++                        && (socketV6 < 0 || service.protect(socketV6));
++                if (!protectedSockets)
++                    throw new BackendException(Reason.GO_ACTIVATION_ERROR_CODE);
++            } finally {
++                if (!protectedSockets) {
++                    final int handleToClose = currentTunnelHandle;
++                    currentTunnelHandle = -1;
++                    awgTurnOff(handleToClose);
++                }
 +            }
              currentTunnel = tunnel;
              currentConfig = config;
@@ -208,7 +215,7 @@
          tunnel.onStateChange(state);
 --- a/tunnel/tools/libwg-go/api-android.go
 +++ b/tunnel/tools/libwg-go/api-android.go
-@@ -3,132 +3,53 @@
+@@ -3,132 +3,52 @@
   * Copyright © 2017-2022 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
   */
  
@@ -256,9 +263,8 @@
 -}
 -
  type TunnelHandle struct {
--	device *device.Device
+ 	device *device.Device
 -	uapi   net.Listener
-+    device *device.Device
  }
  
  var tunnelHandles map[int32]TunnelHandle
@@ -281,7 +287,6 @@
 -			}
 -		}
 -	}()
-+
  }
  
  //export awgTurnOn
@@ -293,8 +298,8 @@
 -	}
 -
 -	tun, name, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
-+    logger := device.NewLogger(device.LogLevelSilent, "")
-+    tun, _, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
++	logger := device.NewLogger(device.LogLevelSilent, "")
++	tun, _, err := tun.CreateUnmonitoredTUNFromFD(int(tunFd))
  	if err != nil {
  		unix.Close(int(tunFd))
  		logger.Errorf("CreateUnmonitoredTUNFromFD: %v", err)
@@ -302,15 +307,17 @@
  	}
  
 -	logger.Verbosef("Attaching to interface %v", name)
--	device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
+ 	device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
 -
 -	err = device.IpcSet(settings)
 -	if err != nil {
 -		unix.Close(int(tunFd))
 -		logger.Errorf("IpcSet: %v", err)
--		return -1
--	}
--	device.DisableSomeRoamingForBrokenMobileSemantics()
++	if err := device.IpcSet(settings); err != nil {
++		device.Close()
+ 		return -1
+ 	}
+ 	device.DisableSomeRoamingForBrokenMobileSemantics()
 -
 -	var uapi net.Listener
 -
@@ -339,24 +346,15 @@
 -	if err != nil {
 -		logger.Errorf("Unable to bring up device: %v", err)
 -		uapiFile.Close()
--		device.Close()
--		return -1
--	}
++	if err := device.Up(); err != nil {
+ 		device.Close()
+ 		return -1
+ 	}
 -	logger.Verbosef("Device started")
-+    device := device.NewDevice(tun, conn.NewStdNetBind(), logger)
-+    if err := device.IpcSet(settings); err != nil {
-+        device.Close()
-+        return -1
-+    }
-+    device.DisableSomeRoamingForBrokenMobileSemantics()
-+    if err := device.Up(); err != nil {
-+        device.Close()
-+        return -1
-+    }
  
  	var i int32
  	for i = 0; i < math.MaxInt32; i++ {
-@@ -137,12 +58,10 @@
+@@ -137,12 +57,10 @@
  		}
  	}
  	if i == math.MaxInt32 {
@@ -370,7 +368,7 @@
  	return i
  }
  
-@@ -153,9 +72,6 @@
+@@ -153,9 +71,6 @@
  		return
  	}
  	delete(tunnelHandles, tunnelHandle)
@@ -380,23 +378,55 @@
  	handle.device.Close()
  }
  
-@@ -203,7 +119,18 @@
+@@ -203,7 +118,18 @@
  	if err != nil {
  		return nil
  	}
 -	return C.CString(settings)
 +	var stats strings.Builder
-+    for _, line := range strings.Split(settings, "\n") {
-+        if strings.HasPrefix(line, "last_handshake_time_sec=") ||
-+            strings.HasPrefix(line, "last_handshake_time_nsec=") ||
-+            strings.HasPrefix(line, "public_key=") ||
-+            strings.HasPrefix(line, "rx_bytes=") ||
-+            strings.HasPrefix(line, "tx_bytes=") {
-+            stats.WriteString(line)
-+            stats.WriteByte('\n')
-+        }
-+    }
-+    return C.CString(stats.String())
++	for _, line := range strings.Split(settings, "\n") {
++		if strings.HasPrefix(line, "last_handshake_time_sec=") ||
++			strings.HasPrefix(line, "last_handshake_time_nsec=") ||
++			strings.HasPrefix(line, "public_key=") ||
++			strings.HasPrefix(line, "rx_bytes=") ||
++			strings.HasPrefix(line, "tx_bytes=") {
++			stats.WriteString(line)
++			stats.WriteByte('\n')
++		}
++	}
++	return C.CString(stats.String())
  }
  
  //export awgVersion
+--- a/tunnel/tools/libwg-go/jni.c
++++ b/tunnel/tools/libwg-go/jni.c
+@@ -3,9 +3,11 @@
+  * Copyright © 2017-2021 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
+  */
+ 
++/* Modified by Kachur VPN: close the detached TUN on JNI allocation failure. */
+ #include <jni.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <unistd.h>
+ 
+ struct go_string { const char *str; long n; };
+ extern int awgTurnOn(struct go_string ifname, int tun_fd, struct go_string settings);
+@@ -18,8 +20,17 @@
+ JNIEXPORT jint JNICALL Java_org_amnezia_awg_GoBackend_awgTurnOn(JNIEnv *env, jclass c, jstring ifname, jint tun_fd, jstring settings)
+ {
+ 	const char *ifname_str = (*env)->GetStringUTFChars(env, ifname, 0);
++	if (!ifname_str) {
++		close(tun_fd);
++		return -1;
++	}
+ 	size_t ifname_len = (*env)->GetStringUTFLength(env, ifname);
+ 	const char *settings_str = (*env)->GetStringUTFChars(env, settings, 0);
++	if (!settings_str) {
++		(*env)->ReleaseStringUTFChars(env, ifname, ifname_str);
++		close(tun_fd);
++		return -1;
++	}
+ 	size_t settings_len = (*env)->GetStringUTFLength(env, settings);
+ 	int ret = awgTurnOn((struct go_string){
+ 		.str = ifname_str,

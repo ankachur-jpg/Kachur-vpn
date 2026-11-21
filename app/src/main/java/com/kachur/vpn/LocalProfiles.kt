@@ -17,6 +17,12 @@ import javax.crypto.spec.GCMParameterSpec
 
 open class KachurApplication : Application() {
     internal val profiles by lazy { LocalProfiles(this, ::profileKey) }
+    internal val visibility = AppVisibility(this)
+
+    override fun onCreate() {
+        super.onCreate()
+        registerActivityLifecycleCallbacks(visibility)
+    }
 
     @Synchronized
     protected open fun profileKey(): SecretKey {

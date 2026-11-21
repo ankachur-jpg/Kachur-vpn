@@ -54,6 +54,7 @@ internal class NetworkDiagnostics(context: Context) {
 
     @Suppress("DEPRECATION")
     fun measure(session: DiagnosticSession?, selectedProfile: AwgConfig?, cancelled: () -> Boolean): List<DiagnosticResult> {
+        if (cancelled()) return emptyList()
         val active = networks.activeNetwork
         val activeCaps = active?.let(networks::getNetworkCapabilities)
         val activeIsVpn = activeCaps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
@@ -81,6 +82,7 @@ internal class NetworkDiagnostics(context: Context) {
                 val address = network?.let { path ->
                     if (target.literal == null) serverAddress(path, profile) else IpRoutePrefix.parse(target.literal)?.address
                 }
+                if (cancelled()) break
                 if (network == null || address == null ||
                     (target.throughVpn && (allowed.none { it.contains(address) } || excluded.any { it.contains(address) }))
                 ) {
@@ -88,9 +90,9 @@ internal class NetworkDiagnostics(context: Context) {
                     continue
                 }
                 val protector = session?.service.takeUnless { target.throughVpn }
-                val icmp = samples(cancelled) { icmp(network, protector, address) }
+                val icmp = samples(cancelled) { icmp(network, protector, address, cancelled) }
                 val tcp = if (icmp.replies == 0 && target.literal != null && !cancelled()) {
-                    samples(cancelled) { tcp(network, protector, address) }
+                    samples(cancelled) { tcp(network, protector, address, cancelled) }
                 } else null
                 add(DiagnosticResult(target, icmp, tcp))
             }
@@ -116,7 +118,7 @@ internal class NetworkDiagnostics(context: Context) {
         return ProbeStats.from(readings)
     }
 
-    private fun icmp(network: Network, service: VpnService?, target: InetAddress): ProbeReading {
+    private fun icmp(network: Network, service: VpnService?, target: InetAddress, cancelled: () -> Boolean): ProbeReading {
         val ipv6 = target is Inet6Address
         val fd = try {
             Os.socket(if (ipv6) OsConstants.AF_INET6 else OsConstants.AF_INET, OsConstants.SOCK_DGRAM,
@@ -131,6 +133,7 @@ internal class NetworkDiagnostics(context: Context) {
             // Unprivileged datagram ICMP sockets let Linux set the identifier and checksum.
             val packet = ByteBuffer.allocate(16).put(if (ipv6) 128.toByte() else 8.toByte())
                 .put(0.toByte()).putShort(0).putShort(0).putShort(1).putLong(nonce).array()
+            if (cancelled()) return ProbeReading.Unavailable
             val start = SystemClock.elapsedRealtimeNanos()
             sent = Os.write(fd, packet, 0, packet.size) == packet.size
             if (!sent) return ProbeReading.Unavailable
@@ -138,7 +141,7 @@ internal class NetworkDiagnostics(context: Context) {
             poll.fd = fd
             poll.events = OsConstants.POLLIN.toShort()
             val reply = ByteArray(64)
-            while (elapsedMs(start) < TIMEOUT_MS) {
+            while (!cancelled() && elapsedMs(start) < TIMEOUT_MS) {
                 val remaining = (TIMEOUT_MS - elapsedMs(start)).toInt().coerceAtLeast(1)
                 if (Os.poll(arrayOf(poll), remaining) == 0 || (poll.revents.toInt() and OsConstants.POLLIN) == 0) break
                 val count = Os.read(fd, reply, 0, reply.size)
@@ -152,12 +155,13 @@ internal class NetworkDiagnostics(context: Context) {
         }
     }
 
-    private fun tcp(network: Network, service: VpnService?, target: InetAddress): ProbeReading {
+    private fun tcp(network: Network, service: VpnService?, target: InetAddress, cancelled: () -> Boolean): ProbeReading {
         var started = false
         return try {
             Socket().use { socket ->
                 network.bindSocket(socket)
                 if (service != null && !service.protect(socket)) return ProbeReading.Unavailable
+                if (cancelled()) return ProbeReading.Unavailable
                 val start = SystemClock.elapsedRealtimeNanos()
                 started = true
                 socket.connect(InetSocketAddress(target, 443), TIMEOUT_MS)

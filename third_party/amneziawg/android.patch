@@ -28,7 +28,7 @@
   * AmneziaWG tunnels.
   */
  @NonNullForAll
-+// Modified by Kachur VPN: explicit service ownership and redacted diagnostics.
++// Modified by Kachur VPN: service ownership, redacted diagnostics and Android routing.
  public final class GoBackend implements Backend {
 +    @Nullable private android.net.VpnService managedService;
 +    @Nullable private Consumer<android.net.VpnService.Builder> configureRoutes;

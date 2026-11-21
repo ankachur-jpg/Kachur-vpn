@@ -79,6 +79,11 @@ internal data class IpRoutePlan(val tunnel: List<IpRoutePrefix>, val direct: Lis
             val direct = mutableListOf<IpRoutePrefix>()
 
             fun emit(target: MutableList<IpRoutePrefix>, path: ByteArray, depth: Int) {
+                // IPv4-mapped addresses use IPv4 routes. Subtraction can produce this reserved
+                // IPv6 range even though imported IPv4-mapped literals are rejected.
+                if (path.size == 16 && depth >= 96 && path[10].toInt() == -1 && path[11].toInt() == -1 &&
+                    (0 until 10).all { path[it].toInt() == 0 }
+                ) return
                 val prefix = IpRoutePrefix.from(path, depth)
                 // Local loopback never uses the VPN. Android refuses it as a route destination.
                 if (prefix.address.isLoopbackAddress) return

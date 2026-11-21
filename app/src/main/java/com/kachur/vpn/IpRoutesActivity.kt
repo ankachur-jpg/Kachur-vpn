@@ -239,6 +239,7 @@ class IpRoutesActivity : ComponentActivity() {
         vpnStatus.visibility = if (needsReconnect || applyingRoutes) View.VISIBLE else View.GONE
         val message = VpnConnection.message
         vpnStatus.text = when {
+            VpnConnection.checkingRoutes -> getString(R.string.ip_vpn_route_checking)
             message == R.string.ip_vpn_route_error && applyingRoutes ->
                 VpnConnection.lastError?.display(this) ?: getString(message)
             needsReconnect && !applyingRoutes -> getString(R.string.ip_reconnect_note)

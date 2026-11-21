@@ -37,6 +37,26 @@ class AwgBackendConfigTest {
     }
 
     @Test
+    @Config(sdk = [28])
+    fun legacyAndroidBuilderReceivesOnlyTheRemainingIpv4AndIpv6Routes() {
+        val config = profile("", "AllowedIPs = 0.0.0.0/0, ::/0").toBackendConfig()
+        val plan = checkNotNull(config.ipRoutePlan(setOf("192.0.2.0/24", "::fffe:0:0/96")))
+        val builder = VpnService().Builder()
+        plan.configure(builder)
+        val routes = ReflectionHelpers.getField<List<RouteInfo>>(builder, "mRoutes")
+        fun includes(address: String): Boolean {
+            val host = checkNotNull(IpRoutePrefix.parse(address)).address
+            return routes.any { it.destination.contains(host) }
+        }
+        assertTrue(plan.direct.isEmpty())
+        assertFalse(includes("192.0.2.7"))
+        assertTrue(includes("198.51.100.7"))
+        assertFalse(includes("::fffe:0:7"))
+        assertTrue(includes("2001:db8::7"))
+        assertFalse(routes.any { it.destination.prefixLength > 32 && it.destination.address.address.size == 4 })
+    }
+
+    @Test
     fun forwardsAllAwg2OptionsAndNormalizesHeaderRangesForGo() {
         val config = profile(
             """

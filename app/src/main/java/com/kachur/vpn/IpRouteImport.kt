@@ -18,7 +18,7 @@ internal class IpImportException(val error: IpImportError, val row: Int? = null)
 
 internal object IpRouteImport {
     const val MAX_ENTRIES = 8192
-    private const val MAX_TEXT_LENGTH = 2 * 1024 * 1024
+    private const val MAX_TEXT_LENGTH = 2_000_000
     private val hostnamePattern = Regex("[a-zA-Z0-9.-]{1,253}")
 
     fun read(input: InputStream): Set<String> {

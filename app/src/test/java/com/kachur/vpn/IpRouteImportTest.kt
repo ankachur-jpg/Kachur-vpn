@@ -58,7 +58,7 @@ class IpRouteImportTest {
         for (malformed in listOf("[][]", "{\"bypass\":[]}", "[", "[/* comment */]", """{"version":1,"bypass":{}}""")) {
             assertError(IpImportError.FORMAT, malformed)
         }
-        assertError(IpImportError.LIMIT, " ".repeat(2 * 1024 * 1024) + "[]")
+        assertError(IpImportError.LIMIT, " ".repeat(2_000_000) + "[]")
         val excessive = List(IpRouteImport.MAX_ENTRIES + 1) { "\"192.0.2.1\"" }.joinToString(",")
         assertError(IpImportError.LIMIT, """{"version":1,"bypass":[$excessive]}""")
     }

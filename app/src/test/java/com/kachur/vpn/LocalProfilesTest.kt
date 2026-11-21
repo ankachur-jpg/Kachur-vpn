@@ -21,24 +21,34 @@ class LocalProfilesTest {
     private val context: Context get() = RuntimeEnvironment.getApplication()
 
     @Test
-    fun migratesTheEncryptedSingleProfileAndKeepsItsIdentityAndCountry() {
+    fun migratesTheEncryptedSingleProfileAndKeepsItsIdentityCountryAndSettings() {
         val old = fixture("Original", "a")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(ByteArray(32) { 42 }, "AES"))
         cipher.updateAAD("Kachur VPN selected profile v1".toByteArray())
         val bytes = cipher.iv + cipher.doFinal(ProfileJson.encode(old).toString().toByteArray())
-        val preferences = SplitTunnelingSettings(context).preferences
+        val routing = SplitTunnelingSettings(context)
+        val preferences = routing.preferences
         preferences.edit().putString("selected_profile_ciphertext", Base64.getEncoder().encodeToString(bytes))
             .putLong("selected_profile_revision", 5L).commit()
         VpnProfileLabels(context).saveCountry(old.documentKey, "Швеция")
-        VpnLaunchSettings(context).setPaused(true)
+        val launch = VpnLaunchSettings(context)
+        launch.setEnabled(false)
+        launch.setPaused(true)
+        launch.setRecoveryEnabled(false)
+        routing.setExcluded("com.example.direct", true)
+        routing.addIpRoutes(setOf("198.51.100.0/24"))
 
         val migrated = context.localProfiles().read()
         assertEquals(5L, migrated.revision)
         assertEquals(old.documentKey, migrated.catalog.selectedId)
         assertEquals(old.config.toPortableConfig(), migrated.catalog.selected?.config?.toPortableConfig())
         assertEquals("Швеция", VpnProfileLabels(context).country(old.documentKey))
-        assertTrue(VpnLaunchSettings(context).paused)
+        assertFalse(launch.enabled)
+        assertTrue(launch.paused)
+        assertFalse(launch.recoveryEnabled)
+        assertEquals(setOf("com.example.direct"), routing.excludedPackages())
+        assertEquals(setOf("198.51.100.0/24"), routing.ipRoutes())
         assertFalse(preferences.contains("selected_profile_ciphertext"))
         assertTrue(preferences.contains("vpn_profile_catalog_ciphertext"))
         assertFalse(preferences.all.toString().contains("Original"))

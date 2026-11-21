@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var activeProfile: TextView
     private lateinit var profileCountry: Button
     private lateinit var autoConnect: Switch
+    private lateinit var autoRecovery: Switch
     private lateinit var notificationAccess: Button
     private lateinit var diagnostics: TextView
     private lateinit var feedback: TextView
@@ -214,6 +215,16 @@ class MainActivity : ComponentActivity() {
             }
         }
         layout.addView(autoConnect)
+        autoRecovery = Switch(this).apply {
+            id = R.id.vpn_auto_recovery
+            setText(R.string.vpn_auto_recovery)
+            setTextColor(Color.WHITE)
+            isSaveEnabled = false
+            setOnCheckedChangeListener { _, checked ->
+                if (launchSettings.recoveryEnabled != checked) launchSettings.setRecoveryEnabled(checked)
+            }
+        }
+        layout.addView(autoRecovery)
         notificationAccess = Button(this).apply {
             id = R.id.vpn_notification_access
             setText(R.string.vpn_notification_access)
@@ -413,6 +424,7 @@ class MainActivity : ComponentActivity() {
         if (tunnelName != null) activeProfile.text = getString(R.string.profiles_active_tunnel, tunnelName)
         autoConnect.isChecked = launchSettings.enabled
         autoConnect.setText(if (launchSettings.enabled && launchSettings.paused) R.string.vpn_auto_paused else R.string.vpn_auto_connect)
+        autoRecovery.isChecked = launchSettings.recoveryEnabled
         val blocked = connectionButtonBlockReason()
         importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
         profileCountry.isEnabled = importButton.isEnabled

@@ -22,7 +22,7 @@ internal class VpnBackup(
     val profiles: ProfileCatalog, val countries: Map<String, String>,
     val apps: Set<String>, val manualRoutes: Set<String>,
     val sources: Map<IpUpdateSource, IpSourceBackup>, val schedule: IpUpdateSchedule,
-    val autoConnect: Boolean, val autoPaused: Boolean,
+    val autoConnect: Boolean, val autoPaused: Boolean, val autoRecovery: Boolean,
 )
 
 internal class BackupFileException(val label: Int) : IOException()
@@ -86,6 +86,7 @@ internal object BackupJson {
         .put("apps", JSONArray(backup.apps)).put("manual", JSONArray(backup.manualRoutes))
         .put("schedule", backup.schedule.name)
         .put("autoConnect", backup.autoConnect).put("autoPaused", backup.autoPaused)
+        .put("autoRecovery", backup.autoRecovery)
         .put("sources", JSONArray().apply {
             backup.sources.forEach { (source, data) -> put(JSONObject()
                 .put("url", source.url?.toASCIIString() ?: JSONObject.NULL)
@@ -135,8 +136,9 @@ internal object BackupJson {
             }
         }
         val schedule = IpUpdateSchedule.entries.firstOrNull { it.name == json.get("schedule") } ?: invalid()
+        val autoRecovery = if (json.has("autoRecovery")) json.get("autoRecovery") as? Boolean ?: invalid() else true
         return VpnBackup(profiles, countries, apps, manual, sources, schedule,
-            json.get("autoConnect") as? Boolean ?: invalid(), json.get("autoPaused") as? Boolean ?: invalid())
+            json.get("autoConnect") as? Boolean ?: invalid(), json.get("autoPaused") as? Boolean ?: invalid(), autoRecovery)
     }
 
     private fun routes(values: JSONArray, limit: Int): Set<String> = strings(values, limit) {
@@ -163,7 +165,7 @@ internal class VpnBackupStore(private val context: Context) {
         val launch = VpnLaunchSettings(context)
         VpnBackup(catalog, catalog.entries.associate { it.documentKey to labels.country(it.documentKey) }, routing.excludedPackages(),
             routing.manualIpRoutes(), config.sources.associateWith { IpSourceBackup(feeds.routesFor(it), feeds.timeFor(it)) },
-            config.schedule, launch.enabled, launch.paused)
+            config.schedule, launch.enabled, launch.paused, launch.recoveryEnabled)
     }
 
     fun restore(backup: VpnBackup): Boolean {
@@ -174,6 +176,7 @@ internal class VpnBackupStore(private val context: Context) {
             val writer = profiles.put(prefs.edit(), sealed, profiles.revision() + 1)
                 .putBoolean(VpnLaunchSettings.ENABLED, backup.autoConnect)
                 .putBoolean(VpnLaunchSettings.PAUSED, backup.autoPaused)
+                .putBoolean(VpnLaunchSettings.RECOVERY_ENABLED, backup.autoRecovery)
             routing.putRules(writer, backup.apps, backup.manualRoutes)
             feeds.putRestoredSources(writer, backup.schedule, backup.sources)
             backup.countries.forEach { (id, country) -> VpnProfileLabels.putCountry(writer, id, country) }

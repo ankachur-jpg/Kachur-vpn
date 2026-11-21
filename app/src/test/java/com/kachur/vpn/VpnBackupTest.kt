@@ -1,6 +1,8 @@
 package com.kachur.vpn
 
 import android.content.Context
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -17,8 +19,6 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
-import org.json.JSONArray
-import org.json.JSONObject
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = TestKachurApplication::class)
@@ -42,7 +42,7 @@ class VpnBackupTest {
     }
 
     @Test
-    fun encryptedCopyRoundTripsTheSelectedProfileRoutingAndUpdateSettings() {
+    fun encryptedCopyRoundTripsAllProfilesSelectionRoutingAndRecoverySettings() {
         val deviceKey = Base64.getEncoder().encodeToString(ByteArray(32) { 4 })
         val peerKey = Base64.getEncoder().encodeToString(ByteArray(32) { 5 })
         val profile = ImportedProfile("Snapshot", AwgConfigParser.parse(
@@ -59,7 +59,10 @@ class VpnBackupTest {
         routeSettings.addIpRoutes(setOf("198.51.100.0/24"))
         assertTrue(VpnProfileLabels(context).saveCountry(profile.documentKey, "Франция"))
         assertTrue(VpnProfileLabels(context).saveCountry(other.documentKey, "Швеция"))
-        VpnLaunchSettings(context).setEnabled(false)
+        val launch = VpnLaunchSettings(context)
+        launch.setEnabled(false)
+        launch.setPaused(true)
+        launch.setRecoveryEnabled(false)
         assertEquals(IpUpdateResult.SUCCESS, IpFeedUpdater(context, { setOf("203.0.113.0/24") }).refresh())
         val store = VpnBackupStore(context)
         val password = "snapshot password".toCharArray()
@@ -72,6 +75,8 @@ class VpnBackupTest {
         routeSettings.removeIpRoute("198.51.100.0/24")
         routeSettings.setExcluded("com.example.direct", false)
         context.localProfiles().remove(other.documentKey)
+        launch.setEnabled(true)
+        launch.setRecoveryEnabled(true)
         val revision = context.localProfiles().revision()
         val imported = BackupJson.decode(BackupCipher.decrypt(encrypted, password))
         assertEquals(revision, context.localProfiles().revision())
@@ -86,31 +91,53 @@ class VpnBackupTest {
         assertEquals(setOf("com.example.direct"), routeSettings.excludedPackages())
         assertEquals(IpUpdateSchedule.DAILY, feeds.configuration().schedule)
         assertEquals(listOf(source), feeds.configuration().custom)
-        assertFalse(VpnLaunchSettings(context).enabled)
+        assertFalse(launch.enabled)
+        assertTrue(launch.paused)
+        assertFalse(launch.recoveryEnabled)
     }
 
     @Test
-    fun opensPasswordEncryptedSingleProfileBackupFromThePreviousVersion() {
+    fun olderMultiProfileBackupsEnableRecoveryByDefault() {
+        val json = JSONObject(BackupJson.encode(VpnBackupStore(context).snapshot()).toString(Charsets.UTF_8))
+        json.remove("autoRecovery")
+        val oldBackup = BackupJson.decode(json.toString().toByteArray(Charsets.UTF_8))
+        assertTrue(oldBackup.autoRecovery)
+    }
+
+    @Test
+    fun restoresEncryptedSingleProfileBackupsWithAndWithoutRecoverySetting() {
         val deviceKey = Base64.getEncoder().encodeToString(ByteArray(32) { 4 })
         val peerKey = Base64.getEncoder().encodeToString(ByteArray(32) { 5 })
         val id = "c".repeat(64)
         val oldJson = JSONObject().put("profile", JSONObject().put("name", "Old profile").put("key", id)
             .put("conf", "[Interface]\nPrivateKey=$deviceKey\n[Peer]\nPublicKey=$peerKey"))
-            .put("country", "Германия").put("apps", JSONArray()).put("manual", JSONArray())
-            .put("schedule", "WEEKLY").put("autoConnect", true).put("autoPaused", false).put("sources", JSONArray())
-            .toString().toByteArray()
+            .put("country", "Германия").put("apps", JSONArray(listOf("com.example.direct")))
+            .put("manual", JSONArray(listOf("198.51.100.0/24")))
+            .put("schedule", "WEEKLY").put("autoConnect", true).put("autoPaused", true).put("sources", JSONArray())
         val password = "synthetic legacy archive".toCharArray()
         val salt = ByteArray(16) { 7 }
-        val nonce = ByteArray(12) { 9 }
-        val header = "KACHUR\u0001".toByteArray() + salt + nonce
         val key = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
             .generateSecret(PBEKeySpec(password, salt, 600_000, 256)).encoded
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
-        cipher.updateAAD(header)
-        val restored = BackupJson.decode(BackupCipher.decrypt(header + cipher.doFinal(oldJson), password))
-        assertEquals(id, restored.profiles.selectedId)
-        assertEquals("Old profile", restored.profiles.selected?.name)
-        assertEquals("Германия", restored.countries[id])
+        val launch = VpnLaunchSettings(context)
+        val routing = SplitTunnelingSettings(context)
+        for ((index, savedRecovery) in listOf(null, false).withIndex()) {
+            if (savedRecovery != null) oldJson.put("autoRecovery", savedRecovery)
+            val nonce = ByteArray(12) { index.toByte() }
+            val header = "KACHUR\u0001".toByteArray() + salt + nonce
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+            cipher.updateAAD(header)
+            val archive = header + cipher.doFinal(oldJson.toString().toByteArray())
+            val backup = BackupJson.decode(BackupCipher.decrypt(archive, password))
+            assertTrue(VpnBackupStore(context).restore(backup))
+            assertEquals(id, context.localProfiles().load()?.documentKey)
+            assertEquals("Old profile", context.localProfiles().load()?.name)
+            assertEquals("Германия", VpnProfileLabels(context).country(id))
+            assertEquals(setOf("com.example.direct"), routing.excludedPackages())
+            assertEquals(setOf("198.51.100.0/24"), routing.ipRoutes())
+            assertTrue(launch.enabled)
+            assertTrue(launch.paused)
+            assertEquals(savedRecovery ?: true, launch.recoveryEnabled)
+        }
     }
 }

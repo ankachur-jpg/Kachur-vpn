@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.content.Intent
+import android.content.SharedPreferences
 import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
@@ -50,8 +51,12 @@ class AwgVpnService : VpnService() {
         state = { VpnConnection.recovering(attempt, it) },
         releaseTunnel = ::releaseForRecovery,
         startTunnel = { startTunnel(reconnecting = true) },
-        failed = { VpnConnection.serviceFailed(attempt, it) },
     )
+    private val launchSettings by lazy { VpnLaunchSettings(this) }
+    private val preferences by lazy { SplitTunnelingSettings(this).preferences }
+    private val recoveryObserver = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == VpnLaunchSettings.RECOVERY_ENABLED && !closing) applyRecoverySetting()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val id = intent?.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L) ?: 0L
@@ -92,6 +97,8 @@ class AwgVpnService : VpnService() {
         VpnConnection.attachDiagnosticService(id, this)
         options = claimed
         country = claimed.country
+        preferences.registerOnSharedPreferenceChangeListener(recoveryObserver)
+        applyRecoverySetting()
         VpnConnection.observe(connectionObserver)
         val initialNotice = VpnNotice(VpnNoticeStatus.CONNECTING, country)
         lastNotice = initialNotice
@@ -122,6 +129,10 @@ class AwgVpnService : VpnService() {
         } catch (_: RuntimeException) {
             VpnConnection.record(R.string.vpn_network_monitor_error, VpnError(R.string.vpn_network_monitor_error))
         }
+    }
+
+    private fun applyRecoverySetting() {
+        if (recovery.setEnabled(launchSettings.recoveryEnabled)) VpnConnection.stop()
     }
 
     private fun startTunnel(reconnecting: Boolean) {
@@ -155,7 +166,8 @@ class AwgVpnService : VpnService() {
             val provingRecovery = reconnecting && engine.requestHandshake(tunnel)
             main.post {
                 if (current(token)) {
-                    if (reconnecting && !provingRecovery) recovery.waitForPeer()
+                    // A profile without a peer endpoint waits for the peer to initiate.
+                    if (reconnecting && !provingRecovery) recovery.finishRecovery()
                     VpnConnection.tunnelReady(id, provingRecovery)
                 }
             }
@@ -230,10 +242,10 @@ class AwgVpnService : VpnService() {
     private fun fail(id: Long, token: Long, message: Int, error: VpnError = VpnError(message), retryable: Boolean = false) {
         main.post {
             if (!current(token)) return@post
-            when {
-                retryable && recovery.recovering -> recovery.retryFailed()
-                message == R.string.vpn_dns_error && monitor != null && recovery.waitAfterOfflineFailure() -> Unit
-                else -> VpnConnection.serviceFailed(id, message, error)
+            if (retryable && monitor != null && recovery.recoverAfterFailure()) {
+                VpnConnection.record(message, error)
+            } else {
+                VpnConnection.serviceFailed(id, message, error)
             }
         }
     }
@@ -326,6 +338,7 @@ class AwgVpnService : VpnService() {
         closing = true
         options = null
         recovery.cancel()
+        if (attempt != 0L) preferences.unregisterOnSharedPreferenceChangeListener(recoveryObserver)
         monitor?.close()
         monitor = null
         VpnConnection.removeObserver(connectionObserver)

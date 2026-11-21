@@ -7,6 +7,9 @@ import android.content.Intent
 import android.graphics.Color
 import android.net.VpnService
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.method.ScrollingMovementMethod
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -14,8 +17,11 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModelProvider
+import java.util.UUID
+import java.util.concurrent.Future
 
 class MainActivity : ComponentActivity() {
     private lateinit var session: ImportSession
@@ -26,21 +32,24 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectButton: Button
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
-    private val vpnObserver: () -> Unit = ::render
+    private val vpnObserver: () -> Unit = ::renderConnection
+    private val main = Handler(Looper.getMainLooper())
     private var resumed = false
-    private var permissionPending = false
+    private var permissionRequest: PermissionRequest? = null
+    private val permissionPending: Boolean
+        get() = permissionRequest?.let { it.dialogLaunched && !it.resultReceived } == true
     private var permissionMessage: Int? = null
 
-    private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (!permissionPending) return@registerForActivityResult
-        if (result.resultCode != Activity.RESULT_OK) {
-            permissionPending = false
-            permissionMessage = R.string.vpn_permission_denied
-            render()
-        } else if (resumed) {
-            finishPermission()
-        }
-        // ActivityResultRegistry can deliver during ON_START, before a foreground service may start.
+    private class PermissionRequest(
+        val key: String = "vpn-permission-${UUID.randomUUID()}",
+        val resetGeneration: Long = VpnConnection.resetGeneration,
+    ) {
+        var dialogLaunched = false
+        var resultReceived = false
+        var launcher: ActivityResultLauncher<Intent>? = null
+        var check: Future<*>? = null
+        var deadline: Runnable? = null
+        var onResume: (() -> Unit)? = null
     }
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -64,8 +73,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         session = ViewModelProvider(this)[ImportSession::class.java]
-        permissionPending = savedInstanceState?.getBoolean(PERMISSION_PENDING) == true
         permissionMessage = savedInstanceState?.getInt(PERMISSION_MESSAGE, 0)?.takeIf { it != 0 }
+        val savedPermissionKey = savedInstanceState?.getString(PERMISSION_REQUEST_KEY)
+        if (savedInstanceState != null && savedPermissionKey != null &&
+            savedInstanceState.getLong(PERMISSION_RESET_GENERATION) == VpnConnection.resetGeneration
+        ) {
+            permissionRequest = PermissionRequest(savedPermissionKey).apply {
+                dialogLaunched = true
+                resultReceived = savedInstanceState.getBoolean(PERMISSION_RESULT_RECEIVED)
+            }
+        } else if (savedInstanceState?.getBoolean(PERMISSION_PENDING) == true) {
+            // An instance saved by an older build has no per-request registration to restore.
+            permissionMessage = R.string.vpn_permission_no_result
+            VpnConnection.record(R.string.vpn_permission_no_result, error = true)
+        }
 
         if (!session.busy && savedInstanceState != null) {
             when {
@@ -74,29 +95,57 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val layout = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            val padding = (24 * resources.displayMetrics.density).toInt()
-            setPadding(padding, padding, padding, padding)
             setBackgroundColor(Color.rgb(18, 24, 35))
+            setOnApplyWindowInsetsListener { view, insets ->
+                @Suppress("DEPRECATION")
+                view.setPadding(
+                    insets.systemWindowInsetLeft + dp(12), insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight + dp(12), insets.systemWindowInsetBottom,
+                )
+                insets
+            }
         }
-        layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
-        profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
-        layout.addView(profileName)
         connectionStatus = label("", 18f, Color.WHITE).apply {
             id = R.id.connection_status
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        layout.addView(connectionStatus)
+        root.addView(connectionStatus)
         connectButton = Button(this).apply {
             id = R.id.connect_vpn_button
-            setText(R.string.connect_vpn)
             setOnClickListener { toggleVpn() }
         }
-        layout.addView(connectButton)
-        connectionDiagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.connection_diagnostics }
-        layout.addView(connectionDiagnostics)
+        root.addView(connectButton)
+        root.addView(Button(this).apply {
+            id = R.id.reset_vpn_button
+            setText(R.string.vpn_reset_connection)
+            setOnClickListener {
+                permissionRequest?.let(::clearPermissionRequest)
+                permissionMessage = null
+                VpnConnection.reset()
+                renderConnection()
+            }
+        })
+        connectionDiagnostics = TextView(this).apply {
+            id = R.id.connection_diagnostics
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(31, 41, 55))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            maxHeight = (resources.displayMetrics.heightPixels * 0.42f).toInt()
+            movementMethod = ScrollingMovementMethod.getInstance()
+        }
+        // The VPN controls and diagnostics stay on screen when the import history scrolls.
+        root.addView(connectionDiagnostics)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(0, dp(8), 0, dp(12))
+        }
+        layout.addView(label(getString(R.string.app_name), 30f, Color.WHITE))
+        profileName = label("", 22f, Color.WHITE).apply { id = R.id.profile_name }
+        layout.addView(profileName)
         diagnostics = label("", 15f, Color.LTGRAY).apply { id = R.id.import_diagnostics }
         layout.addView(diagnostics)
         feedback = label("", 16f, Color.LTGRAY).apply {
@@ -110,21 +159,22 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { selectConfig() }
         }
         layout.addView(importButton)
-        setContentView(ScrollView(this).apply {
-            isFillViewport = true
-            setBackgroundColor(Color.rgb(18, 24, 35))
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                view.setPadding(
-                    insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom,
-                )
-                insets
-            }
+        root.addView(ScrollView(this).apply {
             addView(layout)
-        })
+        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        setContentView(root)
+
         session.onChange = ::render
         render()
+        permissionRequest?.let { request ->
+            armPermissionDeadline(request, PERMISSION_RESULT_TIMEOUT_MS)
+            if (permissionPending) {
+                showPermissionMessage(R.string.vpn_waiting_permission)
+                registerPermissionResult(request)
+            } else {
+                showPermissionMessage(R.string.vpn_permission_check_return)
+            }
+        }
     }
 
     override fun onStart() {
@@ -141,7 +191,15 @@ class MainActivity : ComponentActivity() {
     override fun onPostResume() {
         super.onPostResume()
         resumed = true
-        if (permissionPending) finishPermission()
+        permissionRequest?.takeIf(::isCurrentRequest)?.let { request ->
+            val action = request.onResume
+            request.onResume = null
+            if (action != null) {
+                action()
+            } else if (request.dialogLaunched && request.check == null) {
+                checkPermission(request, allowDialog = false)
+            }
+        }
         if (session.picking) {
             // Registry results are delivered by this point when Android returns from the picker.
             session.finish(R.string.picker_no_callback)
@@ -158,14 +216,21 @@ class MainActivity : ComponentActivity() {
         // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
         outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
         outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
-        outState.putBoolean(PERMISSION_PENDING, permissionPending)
-        permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
+        permissionRequest?.takeIf { it.dialogLaunched }?.let {
+            outState.putString(PERMISSION_REQUEST_KEY, it.key)
+            outState.putBoolean(PERMISSION_RESULT_RECEIVED, it.resultReceived)
+            outState.putLong(PERMISSION_RESET_GENERATION, it.resetGeneration)
+        }
+        if (permissionRequest == null) permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
     }
 
     override fun onDestroy() {
+        permissionRequest?.let(::clearPermissionRequest)
         session.onChange = null
         super.onDestroy()
     }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun label(value: String, size: Float, color: Int) = TextView(this).apply {
         text = value
@@ -207,70 +272,179 @@ class MainActivity : ComponentActivity() {
             else -> getString(message)
         }
         feedback.visibility = if (feedback.text.isEmpty()) View.GONE else View.VISIBLE
+        renderConnection()
+    }
+
+    private fun renderConnection() {
+        permissionRequest?.takeIf { it.resetGeneration != VpnConnection.resetGeneration }?.let {
+            clearPermissionRequest(it)
+            permissionMessage = null
+        }
         val phase = VpnConnection.phase
-        val canStop = phase == VpnPhase.STARTING || phase == VpnPhase.WAITING || phase == VpnPhase.HANDSHAKE
-        importButton.isEnabled = !session.busy && !permissionPending && phase == VpnPhase.IDLE
-        connectButton.isEnabled = !session.busy && !permissionPending && (canStop || phase == VpnPhase.IDLE)
+        val blocked = connectionButtonBlockReason()
+        importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
+        connectButton.isEnabled = blocked == null
         connectButton.setText(when (phase) {
             VpnPhase.STARTING -> R.string.vpn_cancel_start
             VpnPhase.WAITING, VpnPhase.HANDSHAKE -> R.string.vpn_disconnect
             else -> R.string.connect_vpn
         })
-        val connectionMessage = when {
-            phase != VpnPhase.IDLE -> VpnConnection.message
-            permissionPending -> R.string.vpn_waiting_permission
-            else -> permissionMessage ?: VpnConnection.message
-        }
-        connectionStatus.setText(connectionMessage)
-        val steps = if (permissionPending || permissionMessage != null) emptyList() else VpnConnection.stages
-        connectionDiagnostics.text = steps.filter { it != connectionMessage }.joinToString("\n") { getString(it) }
-        connectionDiagnostics.visibility = if (connectionDiagnostics.text.isEmpty()) View.GONE else View.VISIBLE
+        connectionStatus.setText(if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message)
+        connectionDiagnostics.text = getString(
+            R.string.vpn_diagnostic_summary,
+            VpnConnection.eventNumber,
+            getString(VpnConnection.lastEvent),
+            getString(phase.label),
+            permissionPending.toString(),
+            getString(blocked ?: R.string.vpn_button_available),
+            getString(VpnConnection.serviceLaunch),
+            getString(VpnConnection.serviceResponse),
+            getString(VpnConnection.lastError ?: R.string.vpn_no_error),
+        )
     }
 
-    private fun finishPermission() {
-        permissionPending = false
-        val profile = session.profile
-        try {
-            when {
-                VpnService.prepare(this) != null -> permissionMessage = R.string.vpn_permission_no_result
-                profile == null -> permissionMessage = R.string.vpn_profile_required
-                else -> VpnConnection.start(applicationContext, profile.config)
-            }
-        } catch (_: RuntimeException) {
-            permissionMessage = R.string.vpn_permission_unavailable
-        }
-        render()
+    private fun connectionButtonBlockReason(): Int? = when {
+        session.picking -> R.string.vpn_blocked_import_picker
+        session.reading -> R.string.vpn_blocked_import_read
+        permissionPending -> R.string.vpn_blocked_permission_result
+        permissionRequest != null -> R.string.vpn_blocked_permission_check
+        VpnConnection.phase == VpnPhase.STOPPING -> R.string.vpn_blocked_stopping
+        else -> null
     }
 
     private fun toggleVpn() {
+        if (connectionButtonBlockReason() != null) return
+        permissionMessage = null
+        VpnConnection.record(R.string.vpn_connect_pressed)
         if (VpnConnection.phase != VpnPhase.IDLE) {
-            VpnConnection.stop(this)
+            VpnConnection.stop()
             return
         }
-        val profile = session.profile
-        permissionMessage = null
-        if (profile == null) {
-            permissionMessage = R.string.vpn_profile_required
-        } else {
+        if (session.profile == null) {
+            showPermissionMessage(R.string.vpn_profile_required, error = true)
+            return
+        }
+        val request = PermissionRequest()
+        permissionRequest = request
+        armPermissionDeadline(request, PERMISSION_CHECK_TIMEOUT_MS)
+        checkPermission(request, allowDialog = true)
+    }
+
+    private fun checkPermission(request: PermissionRequest, allowDialog: Boolean) {
+        showPermissionMessage(if (allowDialog) R.string.vpn_permission_check else R.string.vpn_permission_check_return)
+        val context = applicationContext
+        request.check = VpnConnection.systemCalls.submit {
             try {
-                val consent = VpnService.prepare(this)
-                if (consent == null) {
-                    VpnConnection.start(applicationContext, profile.config)
-                } else {
-                    permissionPending = true
-                    vpnPermission.launch(consent)
+                val consent = VpnService.prepare(context)
+                main.post {
+                    if (!isCurrentRequest(request)) return@post
+                    request.check = null
+                    when {
+                        consent == null -> runWhenResumed(request) { startWithPermission(request) }
+                        allowDialog -> runWhenResumed(request) { launchPermissionDialog(request, consent) }
+                        else -> finishPermissionRequest(request, R.string.vpn_permission_no_result)
+                    }
                 }
             } catch (_: RuntimeException) {
-                permissionPending = false
-                permissionMessage = R.string.vpn_permission_unavailable
+                main.post { finishPermissionRequest(request, R.string.vpn_permission_unavailable) }
             }
         }
-        render()
+    }
+
+    private fun launchPermissionDialog(request: PermissionRequest, consent: Intent) {
+        request.dialogLaunched = true
+        armPermissionDeadline(request, PERMISSION_RESULT_TIMEOUT_MS)
+        showPermissionMessage(R.string.vpn_waiting_permission)
+        try {
+            registerPermissionResult(request)?.launch(consent)
+        } catch (_: RuntimeException) {
+            finishPermissionRequest(request, R.string.vpn_permission_unavailable)
+        }
+    }
+
+    private fun registerPermissionResult(request: PermissionRequest): ActivityResultLauncher<Intent>? {
+        // A fresh registry key keeps a result from a cancelled dialog out of a later attempt.
+        val launcher = activityResultRegistry.register(request.key, ActivityResultContracts.StartActivityForResult()) { result ->
+            if (!isCurrentRequest(request) || request.resultReceived) return@register
+            request.resultReceived = true
+            when (result.resultCode) {
+                Activity.RESULT_OK -> {
+                    showPermissionMessage(R.string.vpn_permission_result_ok)
+                    if (request.check == null) {
+                        runWhenResumed(request) { checkPermission(request, allowDialog = false) }
+                    }
+                }
+                Activity.RESULT_CANCELED -> finishPermissionRequest(request, R.string.vpn_permission_denied)
+                else -> finishPermissionRequest(request, R.string.vpn_permission_unexpected_result)
+            }
+        }
+        // register() can immediately deliver a result restored by the registry.
+        if (!isCurrentRequest(request)) {
+            launcher.unregister()
+            return null
+        }
+        request.launcher = launcher
+        return launcher
+    }
+
+    private fun startWithPermission(request: PermissionRequest) {
+        clearPermissionRequest(request)
+        permissionMessage = null
+        VpnConnection.record(R.string.vpn_permission_granted)
+        val profile = session.profile
+        if (profile == null) {
+            showPermissionMessage(R.string.vpn_profile_required, error = true)
+        } else {
+            VpnConnection.start(applicationContext, profile.config)
+        }
+        renderConnection()
+    }
+
+    private fun runWhenResumed(request: PermissionRequest, action: () -> Unit) {
+        if (resumed) action() else request.onResume = action
+    }
+
+    private fun armPermissionDeadline(request: PermissionRequest, timeout: Long) {
+        request.deadline?.let(main::removeCallbacks)
+        val deadline = Runnable {
+            val error = if (permissionPending) R.string.vpn_permission_result_timeout else R.string.vpn_permission_check_timeout
+            finishPermissionRequest(request, error)
+        }
+        request.deadline = deadline
+        main.postDelayed(deadline, timeout)
+    }
+
+    private fun finishPermissionRequest(request: PermissionRequest, error: Int) {
+        if (!isCurrentRequest(request)) return
+        clearPermissionRequest(request)
+        showPermissionMessage(error, error = true)
+    }
+
+    private fun isCurrentRequest(request: PermissionRequest): Boolean =
+        permissionRequest === request && request.resetGeneration == VpnConnection.resetGeneration
+
+    private fun clearPermissionRequest(request: PermissionRequest) {
+        permissionRequest = null
+        request.onResume = null
+        request.check?.cancel(true)
+        request.deadline?.let(main::removeCallbacks)
+        request.launcher?.unregister()
+    }
+
+    private fun showPermissionMessage(message: Int, error: Boolean = false) {
+        permissionMessage = message
+        VpnConnection.record(message, error)
+        renderConnection()
     }
 
     private companion object {
         const val PERMISSION_PENDING = "vpn_permission_pending"
+        const val PERMISSION_REQUEST_KEY = "vpn_permission_request_key"
+        const val PERMISSION_RESET_GENERATION = "vpn_permission_reset_generation"
+        const val PERMISSION_RESULT_RECEIVED = "vpn_permission_result_received"
         const val PERMISSION_MESSAGE = "vpn_permission_message"
+        const val PERMISSION_CHECK_TIMEOUT_MS = 30_000L
+        const val PERMISSION_RESULT_TIMEOUT_MS = 60_000L
         const val PICKER_IN_PROGRESS = "config_picker_in_progress"
         const val IMPORT_IN_PROGRESS = "config_import_in_progress"
     }

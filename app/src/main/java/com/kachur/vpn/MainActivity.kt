@@ -207,6 +207,11 @@ class MainActivity : ComponentActivity() {
             setText(R.string.split_title)
             setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
         })
+        layout.addView(Button(this).apply {
+            id = R.id.backup_open_screen
+            setText(R.string.backup_title)
+            setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
+        })
         reconnectButton = Button(this).apply {
             id = R.id.main_split_reconnect_button
             setText(R.string.split_apply_reconnect)

@@ -79,7 +79,7 @@ internal class IpFeedUpdater(
                 snapshots[source] = routes
             }
             current = null
-            validate(manual, snapshots.values)
+            validateDownloadedRoutes(manual, snapshots.values, nativeExclusion)
             if (cancelled()) return null
             settings.save(configuration, manual, snapshots, System.currentTimeMillis())
         } catch (error: IpFeedException) {
@@ -98,17 +98,16 @@ internal class IpFeedUpdater(
         return result
     }
 
-    private fun validate(manual: Set<String>, groups: Collection<Set<String>>) {
-        val downloaded = groups.flatten().toSet()
-        if (downloaded.size > MAX_BATCH_PREFIXES) throw IpFeedException(IpUpdateResult.LIMIT)
-        val blocks = collapseIpPrefixes(downloaded.map(::validatedPrefix))
-        if (blocks.any { it.length == 0 }) throw IpFeedException(IpUpdateResult.UNSAFE)
-        val fullTunnel = listOf(validatedPrefix("0.0.0.0/0"), validatedPrefix("::/0"))
-        IpRoutePlan.build(fullTunnel, blocks + manual.map(::validatedPrefix), nativeExclusion)
-    }
+}
 
-    private fun validatedPrefix(value: String): IpRoutePrefix =
-        IpRoutePrefix.parse(value) ?: throw IpFeedException(IpUpdateResult.INVALID)
+internal fun validateDownloadedRoutes(manual: Set<String>, groups: Collection<Set<String>>, nativeExclusion: Boolean) {
+    val downloaded = groups.flatten().toSet()
+    if (downloaded.size > MAX_BATCH_PREFIXES) throw IpFeedException(IpUpdateResult.LIMIT)
+    fun prefix(value: String) = IpRoutePrefix.parse(value) ?: throw IpFeedException(IpUpdateResult.INVALID)
+    val blocks = collapseIpPrefixes(downloaded.map(::prefix))
+    if (blocks.any { it.length == 0 }) throw IpFeedException(IpUpdateResult.UNSAFE)
+    val fullTunnel = listOf(prefix("0.0.0.0/0"), prefix("::/0"))
+    IpRoutePlan.build(fullTunnel, blocks + manual.map(::prefix), nativeExclusion)
 }
 
 private fun downloadIpFeed(source: IpUpdateSource): Set<String> {

@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.annotation.StringRes
 import java.net.URI
 import java.net.URISyntaxException
@@ -92,6 +93,24 @@ internal class IpUpdateSettings(context: Context) {
     }
     fun failedSource(): String? = preferences.getString("ip_update_failed_source", null)
     fun manualRoutes(): Set<String> = routing.manualIpRoutes()
+
+    fun putRestoredSources(
+        writer: SharedPreferences.Editor,
+        schedule: IpUpdateSchedule,
+        snapshots: Map<IpUpdateSource, IpSourceBackup>,
+    ) {
+        val previous = configuration()
+        removeSnapshots(writer, previous.sources)
+        writer.putLong("ip_update_revision", previous.revision + 1)
+            .putBoolean("ip_update_registry", snapshots.keys.any { it.url == null })
+            .putStringSet("ip_update_urls", snapshots.keys.mapNotNull { it.url?.toASCIIString() }.toSet())
+            .putString("ip_update_schedule", schedule.name)
+            .putStringSet(SplitTunnelingSettings.DOWNLOADED_IP_ROUTES, snapshots.values.flatMapTo(mutableSetOf()) { it.routes })
+            .remove("ip_update_attempt").remove("ip_update_result").remove("ip_update_failed_source")
+        snapshots.forEach { (source, state) ->
+            writer.putStringSet(routesKey(source), state.routes).putLong(timeKey(source), state.updatedAt)
+        }
+    }
 
     fun save(
         config: IpUpdateConfiguration, manual: Set<String>, snapshots: Map<IpUpdateSource, Set<String>>, time: Long,

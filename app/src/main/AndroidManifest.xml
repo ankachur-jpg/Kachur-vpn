@@ -19,6 +19,7 @@
             </intent-filter>
         </activity>
         <receiver android:name=".VpnNotificationReceiver" android:exported="false" />
+        <activity android:name=".BackupActivity" android:exported="false" android:label="@string/backup_title" />
         <activity
             android:name=".SplitTunnelingActivity"
             android:exported="false"

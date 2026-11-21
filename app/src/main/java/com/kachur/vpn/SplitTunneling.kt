@@ -20,7 +20,7 @@ internal class SplitTunnelingSettings(context: Context) {
 
     fun ipRoutes(): Set<String> = manualIpRoutes() + preferences.getStringSet(DOWNLOADED_IP_ROUTES, emptySet()).orEmpty()
 
-    fun snapshot() = VpnRoutingSettings(excludedPackages(), ipRoutes())
+    fun snapshot() = synchronized(ipSettingsLock) { VpnRoutingSettings(excludedPackages(), ipRoutes()) }
 
     // Only canonical prefixes reach this store. Perform edits on the main thread.
     fun addIpRoutes(routes: Set<String>): Int = synchronized(ipSettingsLock) {
@@ -36,11 +36,14 @@ internal class SplitTunnelingSettings(context: Context) {
         if (route in current) preferences.edit().putStringSet("direct_ip_routes", current - route).apply()
     }
 
-    fun setExcluded(packageName: String, excluded: Boolean) {
+    fun setExcluded(packageName: String, excluded: Boolean) = synchronized(ipSettingsLock) {
         val selection = excludedPackages()
         val updated = if (excluded) selection + packageName else selection - packageName
         if (updated != selection) preferences.edit().putStringSet("excluded_packages", updated).apply()
     }
+
+    fun putRules(writer: SharedPreferences.Editor, apps: Set<String>, manual: Set<String>): SharedPreferences.Editor =
+        writer.putStringSet("excluded_packages", apps).putStringSet("direct_ip_routes", manual)
 
     fun onDownloadsChanged(listener: () -> Unit) = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == DOWNLOADED_IP_ROUTES) listener()

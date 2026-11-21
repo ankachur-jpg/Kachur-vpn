@@ -3,7 +3,7 @@ set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 upstream=$(cd -- "${1:?Pass the upstream checkout path}" && pwd)
-pin=fb64e74ba5a0a54e9185b8776bcb8088afb772c9
+pin=5c16489e2cd9ed3a0a7a27c7445bba5238132f86
 test "$(git -C "$upstream" rev-parse HEAD)" = "$pin"
 git -C "$upstream" apply --check "$here/android.patch"
 git -C "$upstream" apply "$here/android.patch"
@@ -17,8 +17,8 @@ sed -i '/^include(":ui")$/d' settings.gradle.kts
 # Exclude the upstream service declaration; Kachur VPN owns the service lifecycle.
 printf '<manifest />\n' > tunnel/src/main/AndroidManifest.xml
 # Use the upstream Go runtime patch with the minimum version required by its go.mod.
-sed -i -e 's/GO_VERSION := 1.24.2/GO_VERSION := 1.24.4/' \
-    -e 's/^GO_HASH_linux-amd64 := .*/GO_HASH_linux-amd64 := 77e5da33bb72aeaef1ba4418b6fe511bc4d041873cbf82e5aa6318740df98717/' \
+sed -i -e 's/GO_VERSION := 1.24.2/GO_VERSION := 1.25.0/' \
+    -e 's/^GO_HASH_linux-amd64 := .*/GO_HASH_linux-amd64 := 2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613/' \
     tunnel/tools/libwg-go/Makefile
 GOTOOLCHAIN=local ./gradlew :tunnel:assembleRelease --stacktrace
 

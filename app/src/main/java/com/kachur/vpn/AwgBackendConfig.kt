@@ -13,16 +13,22 @@ internal fun AwgConfig.toBackendConfig(): Config = buildString {
     appendLine("[Interface]")
     interfaceSection.appendFields(this) { name, value ->
         // Go's header parser requires compact ranges even though Config.parse accepts spaces.
-        if (name in AwgConfigParser.headerFields) value.split('-', limit = 2).joinToString("-") { it.trim() }
+        if (name in AwgConfigParser.headerFields) compactRange(value)
         else value
     }
     for (peer in peers) {
         appendLine("[Peer]")
         peer.appendFields(this) { name, value ->
-            if (name == "persistentkeepalive" && AwgConfigParser.isOff(value)) "0" else value
+            when {
+                name != "persistentkeepalive" -> value
+                value.isEmpty() || AwgConfigParser.isOff(value) -> "0"
+                else -> compactRange(value)
+            }
         }
     }
 }.reader().buffered().use(Config::parse)
+
+private fun compactRange(value: String): String = value.split('-', limit = 2).joinToString("-") { it.trim() }
 
 internal data class VpnError(@StringRes val category: Int, val parameter: AwgParameter? = null) {
     fun display(context: Context): String {
@@ -65,15 +71,15 @@ internal enum class AwgParameter(
     I3("I3", Location.SPECIAL_JUNK_I3),
     I4("I4", Location.SPECIAL_JUNK_I4),
     I5("I5", Location.SPECIAL_JUNK_I5),
-    HEADER_PROTECTION_KEY("HeaderProtectionKey", unsupportedSection = Section.INTERFACE),
-    REKEY_AFTER_TIME("RekeyAfterTime", unsupportedSection = Section.INTERFACE),
-    REKEY_TIMEOUT("RekeyTimeout", unsupportedSection = Section.INTERFACE),
-    REJECT_AFTER_TIME("RejectAfterTime", unsupportedSection = Section.INTERFACE),
-    KEEPALIVE_TIMEOUT("KeepaliveTimeout", unsupportedSection = Section.INTERFACE),
-    MAX_HANDSHAKE_ATTEMPTS("MaxHandshakeAttempts", unsupportedSection = Section.INTERFACE),
-    CONTENT_PADDING_ADDITION("ContentPaddingAddition", unsupportedSection = Section.INTERFACE),
-    RANDOM_TRAILERS("RandomTrailers", unsupportedSection = Section.INTERFACE),
-    DISABLE_COOKIES("DisableCookies", unsupportedSection = Section.INTERFACE),
+    HEADER_PROTECTION_KEY("HeaderProtectionKey", Location.HEADER_PROTECTION_KEY),
+    REKEY_AFTER_TIME("RekeyAfterTime", Location.REKEY_AFTER_TIME),
+    REKEY_TIMEOUT("RekeyTimeout", Location.REKEY_TIMEOUT),
+    REJECT_AFTER_TIME("RejectAfterTime", Location.REJECT_AFTER_TIME),
+    KEEPALIVE_TIMEOUT("KeepaliveTimeout", Location.KEEPALIVE_TIMEOUT),
+    MAX_HANDSHAKE_ATTEMPTS("MaxHandshakeAttempts", Location.MAX_HANDSHAKE_ATTEMPTS),
+    CONTENT_PADDING_ADDITION("ContentPaddingAddition", Location.CONTENT_PADDING_ADDITION),
+    RANDOM_TRAILERS("RandomTrailers", Location.RANDOM_TRAILERS),
+    DISABLE_COOKIES("DisableCookies", Location.DISABLE_COOKIES),
     ADVANCED_SECURITY("AdvancedSecurity", unsupportedSection = Section.PEER),
 }
 

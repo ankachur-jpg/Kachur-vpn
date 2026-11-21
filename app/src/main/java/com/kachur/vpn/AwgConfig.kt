@@ -156,7 +156,7 @@ internal object AwgConfigParser {
         "publickey", "presharedkey" -> validKey(value)
         "allowedips" -> validList(value, ::validCidr)
         "endpoint" -> validEndpoint(value)
-        "persistentkeepalive" -> range(value, allowOff = true) != null
+        "persistentkeepalive" -> value.isEmpty() || range(value, allowOff = true) != null
         "advancedsecurity" -> validBoolean(value)
         else -> null
     }

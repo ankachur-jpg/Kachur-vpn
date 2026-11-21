@@ -73,14 +73,38 @@ class AwgBackendConfigTest {
     }
 
     @Test
-    fun acceptsDisabledKeepaliveAndOptionalDefaults() {
-        for (disabled in listOf("off", "(OFF)", "0")) {
+    fun preservesScalarAndRangeKeepaliveForTheGoEngine() {
+        val values = mapOf(
+            "25" to "25",
+            "0" to "0",
+            "1" to "1",
+            "65535" to "65535",
+            "65536" to "65536",
+            "4294967295" to "4294967295",
+            "22-35" to "22-35",
+            "22 \t- 35" to "22-35",
+            "25 - 25" to "25-25",
+            "4294967294 - 4294967295" to "4294967294-4294967295",
+        )
+        for ((input, expected) in values) {
+            val imported = profile(peerOptions = "peRsiStentKeePalive =  $input  # exported setting")
+            assertEquals(input, imported.peers.single()["PersistentKeepalive"])
+            val config = imported.toBackendConfig()
+            assertEquals(expected, config.peers.single().persistentKeepalive.orElseThrow())
+            assertTrue(config.toAwgUserspaceString().lineSequence().any { it == "persistent_keepalive_interval=$expected" })
+        }
+    }
+
+    @Test
+    fun sendsExplicitZeroForAllDisabledKeepaliveSpellings() {
+        for (disabled in listOf("", "off", "(OFF)", "0")) {
             val config = profile(
                 "IncludedApplications = com.example.one\nMTU = 0\nI5 =",
                 "PersistentKeepalive = $disabled",
             ).toBackendConfig()
 
-            assertFalse(config.peers.single().persistentKeepalive.isPresent)
+            assertEquals("0", config.peers.single().persistentKeepalive.orElseThrow())
+            assertTrue(config.toAwgUserspaceString().lineSequence().any { it == "persistent_keepalive_interval=0" })
             assertEquals(1, config.getInterface().includedApplications.size)
             assertFalse(config.getInterface().mtu.isPresent)
             assertFalse(config.getInterface().specialJunkI5.isPresent)
@@ -88,40 +112,34 @@ class AwgBackendConfigTest {
     }
 
     @Test
-    fun identifiesImportedOptionsThatThePinnedEngineDoesNotSupport() {
-        val options = mapOf(
-            AwgParameter.HEADER_PROTECTION_KEY to "HeaderProtectionKey = ${dummyKey(3)}\nS1 = 12\nS2 = 12\nS3 = 12\nS4 = 12",
-            AwgParameter.REKEY_AFTER_TIME to "RekeyAfterTime = 60",
-            AwgParameter.REKEY_TIMEOUT to "RekeyTimeout = 5",
-            AwgParameter.REJECT_AFTER_TIME to "RejectAfterTime = 120",
-            AwgParameter.KEEPALIVE_TIMEOUT to "KeepaliveTimeout = 5",
-            AwgParameter.MAX_HANDSHAKE_ATTEMPTS to "MaxHandshakeAttempts = 10",
-            AwgParameter.CONTENT_PADDING_ADDITION to "ContentPaddingAddition = 15",
-            AwgParameter.RANDOM_TRAILERS to "RandomTrailers = true",
-            AwgParameter.DISABLE_COOKIES to "dIsAbLeCoOkIeS = true",
-        )
-        options.forEach { (parameter, option) ->
-            assertNativeParserError(profile(option), Reason.UNKNOWN_ATTRIBUTE, parameter, R.string.vpn_config_error_unknown_parameter)
+    fun rejectsInvalidKeepaliveBeforeCallingTheEngine() {
+        for (invalid in listOf("-1", "+25", "25.5", "22-", "-35", "35-22", "22-35-60", "4294967296", "25-4294967296", "on")) {
+            val error = assertThrows(ConfigFormatException::class.java) {
+                profile(peerOptions = "PersistentKeepalive = $invalid")
+            }
+            assertFalse(error.unsupportedOption)
+            assertEquals(6, error.line)
         }
-        assertNativeParserError(
+    }
+
+    @Test
+    fun forwardsSupportedTimingOptionsAndRejectsUnsupportedPeerOptions() {
+        val config = profile("RekeyTimeout = 5-8\nDisableCookies = true").toBackendConfig()
+        val lines = config.toAwgUserspaceString().lineSequence().toSet()
+        assertTrue("rekey_timeout=5-8" in lines)
+        assertTrue("disable_cookies=1" in lines)
+
+        assertBackendParserError(
             profile(peerOptions = "AdvancedSecurity = true"), Reason.UNKNOWN_ATTRIBUTE, AwgParameter.ADVANCED_SECURITY,
             R.string.vpn_config_error_unknown_parameter,
         )
     }
 
     @Test
-    fun rejectsUnrepresentableNumbersAndKeepaliveRangesWithFixedParameterNames() {
-        assertNativeParserError(
+    fun rejectsUnrepresentableJunkCountWithFixedParameterName() {
+        assertBackendParserError(
             profile("Jc = 4294967295"), Reason.INVALID_NUMBER, AwgParameter.JC,
             R.string.vpn_config_error_invalid_number,
-        )
-        assertNativeParserError(
-            profile(peerOptions = "PersistentKeepalive = 10 - 20"), Reason.INVALID_NUMBER, AwgParameter.PERSISTENT_KEEPALIVE,
-            R.string.vpn_config_error_invalid_number,
-        )
-        assertNativeParserError(
-            profile(peerOptions = "PersistentKeepalive = 65536"), Reason.INVALID_VALUE, AwgParameter.PERSISTENT_KEEPALIVE,
-            R.string.vpn_config_error_invalid_value,
         )
     }
 
@@ -164,7 +182,7 @@ class AwgBackendConfigTest {
         assertTrue(error.unsupportedOption)
     }
 
-    private fun assertNativeParserError(
+    private fun assertBackendParserError(
         profile: AwgConfig,
         reason: Reason,
         parameter: AwgParameter,

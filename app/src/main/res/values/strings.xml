@@ -49,7 +49,7 @@
     <string name="vpn_stop_error">При завершении туннеля произошла ошибка.</string>
     <string name="vpn_dns_error">Не удалось разрешить имя сервера VPN.</string>
     <string name="vpn_native_error">Не удалось загрузить нативный движок AmneziaWG.</string>
-    <string name="vpn_backend_invalid_profile">Движок AWG 2.0 не принимает параметры этого профиля.</string>
+    <string name="vpn_backend_invalid_profile">Движок AmneziaWG не принимает параметры этого профиля.</string>
     <string name="vpn_permission_no_result">Android не подтвердил разрешение на VPN. Нажмите «Подключить VPN», чтобы повторить запрос.</string>
     <string name="vpn_permission_granted">Разрешение Android получено.</string>
     <string name="vpn_requesting_service">Вызов startForegroundService()…</string>
@@ -111,6 +111,6 @@
     <string name="vpn_config_error_missing_parameter">Отсутствует обязательный параметр</string>
     <string name="vpn_config_error_missing_section">Отсутствует обязательный раздел</string>
     <string name="vpn_config_error_syntax">Ошибка синтаксиса конфигурации</string>
-    <string name="vpn_config_error_unknown_parameter">Параметр не поддерживается движком AWG 2.0</string>
-    <string name="vpn_config_error_unknown_section">Раздел не поддерживается движком AWG 2.0</string>
+    <string name="vpn_config_error_unknown_parameter">Параметр не поддерживается движком AmneziaWG</string>
+    <string name="vpn_config_error_unknown_section">Раздел не поддерживается движком AmneziaWG</string>
 </resources>

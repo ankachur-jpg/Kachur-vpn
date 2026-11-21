@@ -1,7 +1,13 @@
 <resources>
     <string name="app_name">Kachur VPN</string>
     <string name="no_profile">Профиль не импортирован</string>
-    <string name="vpn_disconnected">VPN не подключён</string>
+    <string name="vpn_disconnected">Отключено</string>
+    <string name="vpn_auto_connect">Подключать VPN при открытии</string>
+    <string name="vpn_auto_paused">Автоподключение приостановлено до ручного подключения</string>
+    <string name="vpn_auto_other_vpn">Автоподключение отложено. Android уже использует VPN.</string>
+    <string name="vpn_blocked_profile_restore">Открывается локальный профиль</string>
+    <string name="profile_restore_error">Не удалось открыть сохранённый профиль. Импортируйте файл .conf ещё раз.</string>
+    <string name="profile_imported_without_save">Профиль импортирован. Android не смог сохранить его для следующего запуска.</string>
     <string name="import_profile">Импортировать .conf</string>
     <string name="connect_vpn">Подключить VPN</string>
     <string name="vpn_profile_required">VPN не подключён. Сначала импортируйте профиль .conf.</string>

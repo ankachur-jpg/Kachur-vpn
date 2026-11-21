@@ -38,6 +38,8 @@ internal object VpnConnection {
         private set
     var resetGeneration = 0L
         private set
+    var manualStopGeneration = 0L
+        private set
     var lastError: VpnError? = null
         private set
     var currentError: VpnError? = null
@@ -60,7 +62,7 @@ internal object VpnConnection {
     private class RoutingCheck(var worker: Future<*>? = null)
     private class Restart(val context: Context, val options: VpnStartOptions)
 
-    private class Attempt(val id: Long, var options: VpnStartOptions?) {
+    private class Attempt(val id: Long, val context: Context, var options: VpnStartOptions?) {
         var request: Future<*>? = null
         var deadline: Runnable? = null
         var cancelService: (() -> Unit)? = null
@@ -104,7 +106,7 @@ internal object VpnConnection {
 
     private fun start(context: Context, options: VpnStartOptions) {
         if (phase != VpnPhase.IDLE) return
-        val attempt = Attempt(++nextAttempt, options)
+        val attempt = Attempt(++nextAttempt, context.applicationContext, options)
         active = attempt
         serviceLaunch = R.string.vpn_requesting_service
         serviceResponse = R.string.vpn_service_awaiting_reply
@@ -297,10 +299,16 @@ internal object VpnConnection {
         publish(phase, R.string.ip_vpn_route_checking)
     }
 
-    fun stop() {
+    fun stopFromNotification(id: Long) {
+        if (id != 0L && ownsAttempt(id)) stop(fromNotification = true)
+    }
+
+    fun stop(fromNotification: Boolean = false) {
         val attempt = active ?: return
+        VpnLaunchSettings(attempt.context).setPaused(true)
+        manualStopGeneration++
         when (phase) {
-            VpnPhase.STARTING -> stopAttempt(attempt, R.string.vpn_start_cancelled)
+            VpnPhase.STARTING -> stopAttempt(attempt, if (fromNotification) R.string.vpn_disconnected else R.string.vpn_start_cancelled)
             VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> stopAttempt(attempt, R.string.vpn_disconnected)
             VpnPhase.STOPPING -> if (attempt.restart != null) {
                 cancelReconnect(attempt, R.string.vpn_disconnected)

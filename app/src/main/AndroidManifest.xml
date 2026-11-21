@@ -11,13 +11,14 @@
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
-    <application android:allowBackup="false" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:supportsRtl="true">
-        <activity android:name=".MainActivity" android:exported="true">
+    <application android:name=".KachurApplication" android:allowBackup="false" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:supportsRtl="true">
+        <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <receiver android:name=".VpnNotificationReceiver" android:exported="false" />
         <activity
             android:name=".SplitTunnelingActivity"
             android:exported="false"

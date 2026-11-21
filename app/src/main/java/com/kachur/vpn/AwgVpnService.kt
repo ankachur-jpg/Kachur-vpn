@@ -58,7 +58,7 @@ class AwgVpnService : VpnService() {
         val action = intent?.action
         if (action == VpnNotifications.ACTION_STOP || action == VpnNotifications.ACTION_DISMISS) {
             if (id != 0L && id == attempt && VpnConnection.ownsAttempt(id)) {
-                if (action == VpnNotifications.ACTION_STOP) VpnConnection.stop() else notificationDismissed = true
+                if (action == VpnNotifications.ACTION_STOP) VpnConnection.stopFromNotification(id) else notificationDismissed = true
             } else if (attempt == 0L) {
                 serviceCalls.execute { stopPlatformService(0L, startId) }
             }

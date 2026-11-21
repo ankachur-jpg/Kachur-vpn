@@ -13,6 +13,15 @@ internal class AwgConfig(
     val peers: List<ConfigSection>,
 )
 
+internal fun AwgConfig.toPortableConfig(): String = buildString {
+    appendLine("[Interface]")
+    interfaceSection.appendFields(this) { _, value -> value }
+    for (peer in peers) {
+        appendLine("[Peer]")
+        peer.appendFields(this) { _, value -> value }
+    }
+}
+
 internal class ConfigSection(private val fields: Map<String, String>) {
     operator fun get(field: String): String? = fields[field.lowercase()]
 

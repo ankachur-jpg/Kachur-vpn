@@ -32,6 +32,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
@@ -41,7 +42,7 @@ import org.robolectric.shadows.ShadowContentResolver
 import org.robolectric.shadows.ShadowVpnService
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [34], application = TestKachurApplication::class)
 class ConfigImportActivityTest {
     @Test
     fun opensDocumentAndShowsProfileFromClipDataWithoutDisplayMetadataAfterRecreation() {
@@ -671,6 +672,69 @@ class ConfigImportActivityTest {
                 VpnConnection.stop()
                 VpnConnection.serviceClosed(id, cleanupFailed = false)
             }
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun opensSavedProfileAndRequestsConsentBeforeAutomaticConnection() {
+        val context = RuntimeEnvironment.getApplication()
+        val profile = ImportedProfile("Test profile", AwgConfigParser.parse(validConfig()), "a".repeat(64))
+        context.localProfiles().save(profile)
+        Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+            val activity = controller.get()
+            awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_waiting_permission))
+            val request = shadowOf(activity).nextStartedActivityForResult
+            assertEquals(VpnConsentShadow.ACTION, request.intent.action)
+            assertNull(shadowOf(activity).nextStartedService)
+            assertTrue(activity.activityResultRegistry.dispatchResult(request.requestCode, Activity.RESULT_CANCELED, null))
+            controller.pause().resume().postResume()
+            assertNull(shadowOf(activity).nextStartedActivityForResult)
+            assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+        }
+    }
+
+    @Test
+    @Config(shadows = [VpnConsentShadow::class])
+    fun notificationStopsWithoutLaunchingAnActivityOrAutomaticallyStartingAgain() {
+        val context = RuntimeEnvironment.getApplication()
+        context.localProfiles().save(ImportedProfile("Test profile", AwgConfigParser.parse(validConfig()), "a".repeat(64)))
+        VpnConsentShadow.granted = true
+        try {
+            Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
+                val activity = controller.get()
+                awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
+                val id = shadowOf(activity).nextStartedService.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+                var stopped = 0
+                assertEquals(R.string.vpn_country_default.let(activity::getString), VpnConnection.claim(id) { stopped++ }?.country)
+                VpnConnection.tunnelReady(id)
+                VpnConnection.handshake(id)
+                controller.pause().resume().postResume()
+                assertNull(shadowOf(activity).nextStartedService)
+
+                val pending = VpnNotifications(context).build(VpnNotice(VpnNoticeStatus.CONNECTED, "Test"), id)
+                    .actions.single().actionIntent
+                assertTrue(shadowOf(pending).isBroadcast)
+                pending.send()
+                shadowOf(Looper.getMainLooper()).idle()
+                assertEquals(1, stopped)
+                assertFalse(activity.isFinishing)
+                assertNull(shadowOf(activity).nextStartedActivity)
+                VpnConnection.serviceClosed(id, false)
+                assertEquals(activity.getString(R.string.vpn_disconnected), text(activity, R.id.connection_status))
+                assertTrue(VpnLaunchSettings(context).paused)
+
+                controller.pause().resume().postResume()
+                assertNull(shadowOf(activity).nextStartedService)
+            }
+            Robolectric.buildActivity(MainActivity::class.java).setup().use { reopened ->
+                awaitViewText(reopened.get(), R.id.profile_name, "Test profile")
+                assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+                assertNull(shadowOf(reopened.get()).nextStartedService)
+            }
+        } finally {
+            VpnConsentShadow.granted = false
+            VpnConnection.reset()
         }
     }
 

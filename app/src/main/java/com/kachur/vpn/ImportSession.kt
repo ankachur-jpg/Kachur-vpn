@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -20,9 +21,13 @@ internal class ImportSession : ViewModel() {
     val stages: List<Int> get() = history
     var reading = false
         private set
+    var restoring = false
+        private set
     var picking = false
         private set
-    val busy: Boolean get() = picking || reading
+    val busy: Boolean get() = picking || reading || restoring
+    var openChecked = false
+    private var revision = -1L
     var feedback: Int? = null
         private set
     var errorLine: Int? = null
@@ -54,8 +59,33 @@ internal class ImportSession : ViewModel() {
         showMessage(message, line)
     }
 
-    fun load(resolver: ContentResolver, uri: Uri, fallbackName: String) {
+    fun syncSavedProfile(context: Context) {
+        val store = context.localProfiles()
+        val expected = store.revision()
+        if (busy || revision == expected) return
+        revision = expected
+        if (!store.exists()) {
+            profile = null
+            return
+        }
+        restoring = true
+        Thread {
+            val saved = try { store.load() } catch (_: Exception) { null }
+            main.post {
+                restoring = false
+                if (store.revision() != expected) {
+                    syncSavedProfile(context)
+                } else {
+                    profile = saved
+                    if (saved == null) showMessage(R.string.profile_restore_error) else onChange?.invoke()
+                }
+            }
+        }.start()
+    }
+
+    fun load(context: Context, uri: Uri, fallbackName: String) {
         if (reading) return
+        val resolver = context.contentResolver
         picking = false
         reading = true
         record(R.string.import_document_opening)
@@ -63,6 +93,7 @@ internal class ImportSession : ViewModel() {
             var imported: ImportedProfile? = null
             var message = R.string.profile_imported
             var line: Int? = null
+            var savedRevision: Long? = null
             var accessError = R.string.cannot_open_config
             try {
                 val stream = resolver.openInputStream(uri) ?: throw IOException()
@@ -76,7 +107,14 @@ internal class ImportSession : ViewModel() {
                 main.post { record(R.string.import_profile_naming) }
                 val name = documentName(resolver, uri)
                 if (name == null) main.post { record(R.string.import_profile_default_name) }
-                imported = ImportedProfile(name ?: fallbackName, config, VpnProfileLabels.documentKey(uri))
+                val selected = ImportedProfile(name ?: fallbackName, config, VpnProfileLabels.documentKey(uri))
+                imported = selected
+                try {
+                    savedRevision = context.localProfiles().save(selected)
+                } catch (_: Exception) {
+                    VpnLaunchSettings(context).setPaused(true)
+                    message = R.string.profile_imported_without_save
+                }
             } catch (error: ConfigFormatException) {
                 line = error.line
                 message = when (error.problem) {
@@ -104,6 +142,7 @@ internal class ImportSession : ViewModel() {
             main.post {
                 imported?.let {
                     profile = it
+                    revision = savedRevision ?: context.localProfiles().revision()
                     history.add(R.string.import_profile_displayed)
                 }
                 finish(message, line)

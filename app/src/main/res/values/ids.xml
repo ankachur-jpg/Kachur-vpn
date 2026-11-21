@@ -6,6 +6,15 @@
     <item type="id" name="connection_status" />
     <item type="id" name="vpn_notification_access" />
     <item type="id" name="vpn_profile_country" />
+    <item type="id" name="vpn_auto_connect" />
+    <item type="id" name="vpn_auto_recovery" />
+    <item type="id" name="backup_open_screen" />
+    <item type="id" name="backup_export" />
+    <item type="id" name="backup_open" />
+    <item type="id" name="backup_preview" />
+    <item type="id" name="backup_confirm" />
+    <item type="id" name="diag_open_screen" />
+    <item type="id" name="diag_run" />
     <item type="id" name="connect_vpn_button" />
     <item type="id" name="connection_diagnostics" />
     <item type="id" name="reset_vpn_button" />
@@ -26,4 +35,10 @@
     <item type="id" name="ip_remove_button" />
     <item type="id" name="ip_list" />
     <item type="id" name="ip_reconnect_button" />
+    <item type="id" name="ip_open_sources" />
+    <item type="id" name="ip_update_registry" />
+    <item type="id" name="ip_update_schedule" />
+    <item type="id" name="ip_update_add" />
+    <item type="id" name="ip_update_now" />
+    <item type="id" name="ip_update_status" />
 </resources>

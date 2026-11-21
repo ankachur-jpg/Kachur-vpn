@@ -12,6 +12,7 @@ import android.os.Handler
 internal class UnderlyingNetworkMonitor(context: Context, private val handler: Handler, private val changed: (Long?) -> Unit) {
     private val manager = checkNotNull(context.getSystemService(ConnectivityManager::class.java))
     private val validated = mutableMapOf<Network, Int>()
+    private val blocked = mutableSetOf<Network>()
     private var preferred: Network? = null
     private var selected: Network? = null
     private var reported = false
@@ -19,10 +20,11 @@ internal class UnderlyingNetworkMonitor(context: Context, private val handler: H
     private var bestRegistered = false
 
     private val dispatch = Runnable {
-        val best = validated.maxOfOrNull { it.value }
-        val next = preferred?.takeIf(validated::containsKey)
-            ?: selected?.takeIf { best != null && validated[it] == best }
-            ?: validated.entries.firstOrNull { it.value == best }?.key
+        val usable = validated.filterKeys { it !in blocked }
+        val best = usable.maxOfOrNull { it.value }
+        val next = preferred?.takeIf(usable::containsKey)
+            ?: selected?.takeIf { best != null && usable[it] == best }
+            ?: usable.entries.firstOrNull { it.value == best }?.key
         if (!reported || next != selected) {
             selected = next
             reported = true
@@ -45,13 +47,23 @@ internal class UnderlyingNetworkMonitor(context: Context, private val handler: H
                 }
                 if (validated.put(network, rank) != rank) scheduleDispatch()
             } else {
-                if (validated.remove(network) != null) scheduleDispatch()
+                if (validated.remove(network) != null) networkInvalidated(network)
             }
         }
 
         override fun onLost(network: Network) {
             if (!registered) return
-            if (validated.remove(network) != null) scheduleDispatch()
+            blocked.remove(network)
+            if (validated.remove(network) != null) networkInvalidated(network)
+        }
+
+        override fun onBlockedStatusChanged(network: Network, blockedForApp: Boolean) {
+            if (!registered) return
+            if (blockedForApp) {
+                if (blocked.add(network) && network in validated) networkInvalidated(network)
+            } else {
+                if (blocked.remove(network) && network in validated) scheduleDispatch()
+            }
         }
     }
 
@@ -98,6 +110,17 @@ internal class UnderlyingNetworkMonitor(context: Context, private val handler: H
             unregister(best)
         }
         validated.clear()
+        blocked.clear()
+    }
+
+    private fun networkInvalidated(network: Network) {
+        if (network == selected) {
+            // A retry already queued for the old network must see the loss immediately.
+            handler.removeCallbacks(dispatch)
+            dispatch.run()
+        } else {
+            scheduleDispatch()
+        }
     }
 
     private fun scheduleDispatch() {

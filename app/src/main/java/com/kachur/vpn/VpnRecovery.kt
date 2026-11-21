@@ -1,6 +1,7 @@
 package com.kachur.vpn
 
 import android.os.Handler
+import kotlin.random.Random
 
 /** Main-thread policy for a single user-started VPN session. */
 internal class VpnRecovery(
@@ -8,50 +9,42 @@ internal class VpnRecovery(
     private val state: (Int) -> Unit,
     private val releaseTunnel: () -> Unit,
     private val startTunnel: () -> Unit,
-    private val failed: (Int) -> Unit,
+    private val jitter: (Long) -> Long = { Random.nextLong(it + 1L) },
 ) {
+    private var enabled = true
     private var closed = false
     private var networkKnown = false
     private var network: Long? = null
-    private var attempts = 0
+    private var nextDelayMs = INITIAL_DELAY_MS
     private var inFlight = false
     var recovering = false
         private set
 
-    private val attemptTimeout = Runnable { retryFailed() }
+    private val attemptTimeout = Runnable { if (inFlight) recoverAfterFailure() }
     private val retry = Runnable {
-        if (recovering && network != null) {
-            attempts++
-            inFlight = true
-            state(R.string.vpn_recovery_connecting)
-            handler.postDelayed(attemptTimeout, ATTEMPT_TIMEOUT_MS)
-            startTunnel()
-        }
+        if (!recovering || inFlight || network == null) return@Runnable
+        inFlight = true
+        handler.postDelayed(attemptTimeout, ATTEMPT_TIMEOUT_MS)
+        state(R.string.vpn_recovery_connecting)
+        if (inFlight) startTunnel()
     }
-    private val recoveryTimeout = Runnable { finishWithError(R.string.vpn_recovery_timeout) }
-    private val stable = Runnable { attempts = 0 }
 
     fun networkChanged(handle: Long?) {
         if (closed || (networkKnown && network == handle)) return
         val changed = networkKnown
         networkKnown = true
         network = handle
-        if (changed || recovering) begin()
+        if (enabled && (changed || recovering)) begin()
     }
 
-    // Preserve local-server profiles on the initial start, even on unvalidated Wi-Fi.
-    fun waitAfterOfflineFailure(): Boolean {
-        if (closed || network != null) return false
+    fun recoverAfterFailure(): Boolean {
+        if (closed || !enabled) return false
+        if (inFlight) nextDelayMs = (nextDelayMs * 2).coerceAtMost(MAX_DELAY_MS)
         begin()
         return true
     }
 
-    fun retryFailed() {
-        if (!inFlight) return
-        begin()
-    }
-
-    fun waitForPeer() {
+    fun finishRecovery() {
         clearRecoveryTimers()
         recovering = false
         inFlight = false
@@ -60,54 +53,46 @@ internal class VpnRecovery(
     // A new tunnel has its own handshake and counters. Old engine callbacks are discarded by the service.
     fun handshakeReceived(): Boolean {
         if (closed || (recovering && !inFlight)) return false
-        if (recovering) waitForPeer()
-        if (attempts > 0) handler.postDelayed(stable, STABLE_NETWORK_MS)
+        finishRecovery()
+        nextDelayMs = INITIAL_DELAY_MS
+        return true
+    }
+
+    // Return true when the caller must end an interrupted recovery session.
+    fun setEnabled(enabled: Boolean): Boolean {
+        this.enabled = enabled
+        if (enabled || !recovering) return false
+        finishRecovery()
         return true
     }
 
     fun cancel() {
         closed = true
-        recovering = false
-        inFlight = false
-        clearRecoveryTimers()
-        handler.removeCallbacks(stable)
+        finishRecovery()
     }
 
     private fun begin() {
-        if (!recovering) {
-            recovering = true
-            handler.postDelayed(recoveryTimeout, RECOVERY_TIMEOUT_MS)
-        }
-        handler.removeCallbacks(stable)
-        handler.removeCallbacks(retry)
-        handler.removeCallbacks(attemptTimeout)
+        val needsRelease = !recovering || inFlight
+        clearRecoveryTimers()
+        recovering = true
         inFlight = false
-        releaseTunnel()
-        when {
-            network == null -> state(R.string.vpn_recovery_waiting_network)
-            attempts == delays.size -> finishWithError(R.string.vpn_recovery_exhausted)
-            else -> {
-                state(R.string.vpn_recovery_scheduled)
-                handler.postDelayed(retry, delays[attempts])
-            }
+        if (needsRelease) releaseTunnel()
+        if (network == null) {
+            state(R.string.vpn_recovery_waiting_network)
+        } else {
+            handler.postDelayed(retry, nextDelayMs - jitter(nextDelayMs / 10))
+            state(R.string.vpn_recovery_scheduled)
         }
-    }
-
-    private fun finishWithError(message: Int) {
-        cancel()
-        failed(message)
     }
 
     private fun clearRecoveryTimers() {
         handler.removeCallbacks(retry)
         handler.removeCallbacks(attemptTimeout)
-        handler.removeCallbacks(recoveryTimeout)
     }
 
     companion object {
-        private val delays = longArrayOf(1_000L, 3_000L, 8_000L)
+        const val INITIAL_DELAY_MS = 1_000L
+        const val MAX_DELAY_MS = 5 * 60_000L
         const val ATTEMPT_TIMEOUT_MS = 40_000L
-        const val RECOVERY_TIMEOUT_MS = 5 * 60_000L
-        const val STABLE_NETWORK_MS = 60_000L
     }
 }

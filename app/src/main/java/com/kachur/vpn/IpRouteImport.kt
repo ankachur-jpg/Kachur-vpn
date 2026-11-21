@@ -22,6 +22,25 @@ internal object IpRouteImport {
     private val hostnamePattern = Regex("[a-zA-Z0-9.-]{1,253}")
 
     fun read(input: InputStream): Set<String> {
+        val source = readText(input)
+        try {
+            JsonReader(StringReader(source)).use { json ->
+                val result = when (json.peek()) {
+                    JsonToken.BEGIN_ARRAY -> readList(json, legacy = true)
+                    JsonToken.BEGIN_OBJECT -> readVersioned(json)
+                    else -> fail(IpImportError.FORMAT)
+                }
+                if (json.peek() != JsonToken.END_DOCUMENT) fail(IpImportError.FORMAT)
+                return result
+            }
+        } catch (_: IOException) {
+            fail(IpImportError.FORMAT)
+        } catch (_: IllegalStateException) {
+            fail(IpImportError.FORMAT)
+        }
+    }
+
+    fun readText(input: InputStream): String {
         val source = StringBuilder()
         val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
         val reader = InputStreamReader(input, decoder)
@@ -36,22 +55,7 @@ internal object IpRouteImport {
         } catch (_: CharacterCodingException) {
             fail(IpImportError.FORMAT)
         }
-
-        try {
-            JsonReader(StringReader(source.toString().removePrefix("\uFEFF"))).use { json ->
-                val result = when (json.peek()) {
-                    JsonToken.BEGIN_ARRAY -> readList(json, legacy = true)
-                    JsonToken.BEGIN_OBJECT -> readVersioned(json)
-                    else -> fail(IpImportError.FORMAT)
-                }
-                if (json.peek() != JsonToken.END_DOCUMENT) fail(IpImportError.FORMAT)
-                return result
-            }
-        } catch (_: IOException) {
-            fail(IpImportError.FORMAT)
-        } catch (_: IllegalStateException) {
-            fail(IpImportError.FORMAT)
-        }
+        return source.toString().removePrefix("\uFEFF")
     }
 
     private fun readVersioned(json: JsonReader): Set<String> {

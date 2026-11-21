@@ -55,6 +55,31 @@ class UnderlyingNetworkMonitorTest {
         assertTrue(shadowOf(manager).networkCallbacks.isEmpty())
     }
 
+    @Test
+    fun blockedOrLostSelectedNetworkIsReportedWithoutDebouncingTheLoss() {
+        val context: Context = RuntimeEnvironment.getApplication()
+        val manager = context.getSystemService(ConnectivityManager::class.java)
+        val main = Looper.getMainLooper()
+        val seen = mutableListOf<Long?>()
+        val monitor = UnderlyingNetworkMonitor(context, Handler(main)) { seen.add(it) }
+        monitor.start()
+        try {
+            val callback = shadowOf(manager).networkCallbacks.single()
+            val wifi = ShadowNetwork.newInstance(20)
+            callback.onCapabilitiesChanged(wifi, capabilities(NetworkCapabilities.TRANSPORT_WIFI))
+            shadowOf(main).idleFor(Duration.ofSeconds(2))
+
+            callback.onBlockedStatusChanged(wifi, true)
+            assertEquals(listOf(wifi.networkHandle, null), seen)
+            callback.onBlockedStatusChanged(wifi, false)
+            shadowOf(main).idleFor(Duration.ofSeconds(2))
+            callback.onLost(wifi)
+            assertEquals(listOf(wifi.networkHandle, null, wifi.networkHandle, null), seen)
+        } finally {
+            monitor.close()
+        }
+    }
+
     private fun capabilities(transport: Int, online: Boolean = true): NetworkCapabilities =
         ShadowNetworkCapabilities.newInstance().apply {
             shadowOf(this).addTransportType(transport)

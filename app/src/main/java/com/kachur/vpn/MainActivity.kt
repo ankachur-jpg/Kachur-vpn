@@ -9,6 +9,8 @@ import android.content.ContentResolver
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
@@ -23,6 +25,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -36,6 +39,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
     private lateinit var profileCountry: Button
+    private lateinit var autoConnect: Switch
+    private lateinit var autoRecovery: Switch
     private lateinit var notificationAccess: Button
     private lateinit var diagnostics: TextView
     private lateinit var feedback: TextView
@@ -45,18 +50,23 @@ class MainActivity : ComponentActivity() {
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
     private val vpnObserver: () -> Unit = ::renderConnection
+    private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
+    private val downloadsObserver by lazy { splitSettings.onDownloadsChanged(::renderConnection) }
     private val main = Handler(Looper.getMainLooper())
     private var resumed = false
     private var permissionRequest: PermissionRequest? = null
     private val permissionPending: Boolean
         get() = permissionRequest?.let { it.dialogLaunched && !it.resultReceived } == true
     private var permissionMessage: Int? = null
+    private var manualStopSeen = VpnConnection.manualStopGeneration
+    private val launchSettings by lazy { VpnLaunchSettings(applicationContext) }
     private val labels by lazy { VpnProfileLabels(applicationContext) }
     private val notificationSettings by lazy { getSharedPreferences("vpn_notifications", MODE_PRIVATE) }
 
     private class PermissionRequest(
         val key: String = "vpn-permission-${UUID.randomUUID()}",
         val resetGeneration: Long = VpnConnection.resetGeneration,
+        val automatic: Boolean = false,
     ) {
         var dialogLaunched = false
         var resultReceived = false
@@ -77,7 +87,7 @@ class MainActivity : ComponentActivity() {
                     uri == null -> session.finish(R.string.no_document_returned)
                     uri.scheme != ContentResolver.SCHEME_CONTENT ->
                         session.finish(R.string.unsupported_document_uri)
-                    else -> session.load(applicationContext.contentResolver, uri, getString(R.string.unnamed_profile))
+                    else -> session.load(applicationContext, uri, getString(R.string.unnamed_profile))
                 }
             }
             else -> session.finish(R.string.unexpected_picker_result)
@@ -96,7 +106,7 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState != null && savedPermissionKey != null &&
             savedInstanceState.getLong(PERMISSION_RESET_GENERATION) == VpnConnection.resetGeneration
         ) {
-            permissionRequest = PermissionRequest(savedPermissionKey).apply {
+            permissionRequest = PermissionRequest(savedPermissionKey, automatic = savedInstanceState.getBoolean(PERMISSION_AUTOMATIC)).apply {
                 dialogLaunched = true
                 resultReceived = savedInstanceState.getBoolean(PERMISSION_RESULT_RECEIVED)
             }
@@ -141,6 +151,7 @@ class MainActivity : ComponentActivity() {
             setOnClickListener {
                 permissionRequest?.let(::clearPermissionRequest)
                 permissionMessage = null
+                launchSettings.setPaused(true)
                 VpnConnection.reset()
                 renderConnection()
             }
@@ -169,6 +180,33 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { editCountry() }
         }
         layout.addView(profileCountry)
+        autoConnect = Switch(this).apply {
+            id = R.id.vpn_auto_connect
+            setOnCheckedChangeListener { _, checked ->
+                if (launchSettings.enabled != checked) {
+                    launchSettings.setEnabled(checked)
+                    if (checked) {
+                        session.openChecked = false
+                        maybeAutoConnect()
+                    } else if (permissionRequest?.automatic == true) {
+                        permissionRequest?.let(::clearPermissionRequest)
+                        permissionMessage = null
+                    }
+                    renderConnection()
+                }
+            }
+        }
+        layout.addView(autoConnect)
+        autoRecovery = Switch(this).apply {
+            id = R.id.vpn_auto_recovery
+            setText(R.string.vpn_auto_recovery)
+            setTextColor(Color.WHITE)
+            isSaveEnabled = false
+            setOnCheckedChangeListener { _, checked ->
+                if (launchSettings.recoveryEnabled != checked) launchSettings.setRecoveryEnabled(checked)
+            }
+        }
+        layout.addView(autoRecovery)
         notificationAccess = Button(this).apply {
             id = R.id.vpn_notification_access
             setText(R.string.vpn_notification_access)
@@ -179,6 +217,16 @@ class MainActivity : ComponentActivity() {
             id = R.id.split_open_button
             setText(R.string.split_title)
             setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
+        })
+        layout.addView(Button(this).apply {
+            id = R.id.backup_open_screen
+            setText(R.string.backup_title)
+            setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
+        })
+        layout.addView(Button(this).apply {
+            id = R.id.diag_open_screen
+            setText(R.string.diag_title)
+            setOnClickListener { startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java)) }
         })
         reconnectButton = Button(this).apply {
             id = R.id.main_split_reconnect_button
@@ -204,7 +252,7 @@ class MainActivity : ComponentActivity() {
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
 
-        session.onChange = ::render
+        session.onChange = { render(); maybeAutoConnect() }
         render()
         renderNotificationAccess()
         permissionRequest?.let { request ->
@@ -220,11 +268,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
+        splitSettings.preferences.registerOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.observe(vpnObserver)
+        session.syncSavedProfile(applicationContext)
         render()
     }
 
     override fun onStop() {
+        splitSettings.preferences.unregisterOnSharedPreferenceChangeListener(downloadsObserver)
         VpnConnection.removeObserver(vpnObserver)
         super.onStop()
     }
@@ -247,6 +298,16 @@ class MainActivity : ComponentActivity() {
         }
         renderConnection()
         renderNotificationAccess()
+        maybeAutoConnect()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == Intent.ACTION_MAIN) {
+            session.openChecked = false
+            maybeAutoConnect()
+        }
     }
 
     override fun onPause() {
@@ -263,6 +324,7 @@ class MainActivity : ComponentActivity() {
             outState.putString(PERMISSION_REQUEST_KEY, it.key)
             outState.putBoolean(PERMISSION_RESULT_RECEIVED, it.resultReceived)
             outState.putLong(PERMISSION_RESET_GENERATION, it.resetGeneration)
+            outState.putBoolean(PERMISSION_AUTOMATIC, it.automatic)
         }
         if (permissionRequest == null) permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
     }
@@ -322,11 +384,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderConnection() {
+        if (manualStopSeen != VpnConnection.manualStopGeneration) {
+            manualStopSeen = VpnConnection.manualStopGeneration
+            permissionRequest?.let(::clearPermissionRequest)
+            permissionMessage = null
+        }
         permissionRequest?.takeIf { it.resetGeneration != VpnConnection.resetGeneration }?.let {
             clearPermissionRequest(it)
             permissionMessage = null
         }
         val phase = VpnConnection.phase
+        autoConnect.isChecked = launchSettings.enabled
+        autoConnect.setText(if (launchSettings.enabled && launchSettings.paused) R.string.vpn_auto_paused else R.string.vpn_auto_connect)
+        autoRecovery.isChecked = launchSettings.recoveryEnabled
         val blocked = connectionButtonBlockReason()
         importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
         profileCountry.isEnabled = importButton.isEnabled
@@ -410,6 +480,7 @@ class MainActivity : ComponentActivity() {
     private fun connectionButtonBlockReason(): Int? = when {
         session.picking -> R.string.vpn_blocked_import_picker
         session.reading -> R.string.vpn_blocked_import_read
+        session.restoring -> R.string.vpn_blocked_profile_restore
         permissionPending -> R.string.vpn_blocked_permission_result
         permissionRequest != null -> R.string.vpn_blocked_permission_check
         VpnConnection.phase == VpnPhase.STOPPING -> R.string.vpn_blocked_stopping
@@ -428,7 +499,21 @@ class MainActivity : ComponentActivity() {
             showPermissionMessage(R.string.vpn_profile_required, error = true)
             return
         }
-        val request = PermissionRequest()
+        session.openChecked = true
+        requestConnection(automatic = false)
+    }
+
+    private fun maybeAutoConnect() {
+        if (!resumed || session.openChecked || session.busy) return
+        session.openChecked = true
+        if (!launchSettings.enabled || launchSettings.paused || permissionRequest != null ||
+            session.profile == null || VpnConnection.phase != VpnPhase.IDLE
+        ) return
+        requestConnection(automatic = true)
+    }
+
+    private fun requestConnection(automatic: Boolean) {
+        val request = PermissionRequest(automatic = automatic)
         permissionRequest = request
         armPermissionDeadline(request, PERMISSION_CHECK_TIMEOUT_MS)
         checkPermission(request, allowDialog = true)
@@ -439,6 +524,10 @@ class MainActivity : ComponentActivity() {
         val context = applicationContext
         request.check = VpnConnection.systemCalls.submit {
             try {
+                if (request.automatic && allowDialog && existingSystemVpn(context)) {
+                    main.post { finishPermissionRequest(request, R.string.vpn_auto_other_vpn, error = false) }
+                    return@submit
+                }
                 val consent = VpnService.prepare(context)
                 main.post {
                     if (!isCurrentRequest(request)) return@post
@@ -494,11 +583,16 @@ class MainActivity : ComponentActivity() {
     private fun startWithPermission(request: PermissionRequest) {
         clearPermissionRequest(request)
         permissionMessage = null
+        if (VpnConnection.phase != VpnPhase.IDLE || (request.automatic && (!launchSettings.enabled || launchSettings.paused))) {
+            renderConnection()
+            return
+        }
         VpnConnection.record(R.string.vpn_permission_granted)
         val profile = session.profile
         if (profile == null) {
             showPermissionMessage(R.string.vpn_profile_required, error = true)
         } else {
+            if (!request.automatic) launchSettings.setPaused(false)
             VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey))
         }
         renderConnection()
@@ -518,10 +612,10 @@ class MainActivity : ComponentActivity() {
         main.postDelayed(deadline, timeout)
     }
 
-    private fun finishPermissionRequest(request: PermissionRequest, error: Int) {
+    private fun finishPermissionRequest(request: PermissionRequest, message: Int, error: Boolean = true) {
         if (!isCurrentRequest(request)) return
         clearPermissionRequest(request)
-        showPermissionMessage(error, error = true)
+        showPermissionMessage(message, error)
     }
 
     private fun isCurrentRequest(request: PermissionRequest): Boolean =
@@ -541,11 +635,18 @@ class MainActivity : ComponentActivity() {
         renderConnection()
     }
 
+    private fun existingSystemVpn(context: android.content.Context): Boolean {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return false
+        return manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
+
     private companion object {
         const val PERMISSION_PENDING = "vpn_permission_pending"
         const val PERMISSION_REQUEST_KEY = "vpn_permission_request_key"
         const val PERMISSION_RESET_GENERATION = "vpn_permission_reset_generation"
         const val PERMISSION_RESULT_RECEIVED = "vpn_permission_result_received"
+        const val PERMISSION_AUTOMATIC = "vpn_permission_automatic"
         const val PERMISSION_MESSAGE = "vpn_permission_message"
         const val PERMISSION_CHECK_TIMEOUT_MS = 30_000L
         const val PERMISSION_RESULT_TIMEOUT_MS = 60_000L

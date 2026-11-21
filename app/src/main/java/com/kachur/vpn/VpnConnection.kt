@@ -2,6 +2,7 @@ package com.kachur.vpn
 
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import android.os.Handler
 import android.os.Looper
 import org.amnezia.awg.config.BadConfigException
@@ -38,6 +39,8 @@ internal object VpnConnection {
         private set
     var resetGeneration = 0L
         private set
+    var manualStopGeneration = 0L
+        private set
     var lastError: VpnError? = null
         private set
     var currentError: VpnError? = null
@@ -60,13 +63,14 @@ internal object VpnConnection {
     private class RoutingCheck(var worker: Future<*>? = null)
     private class Restart(val context: Context, val options: VpnStartOptions)
 
-    private class Attempt(val id: Long, var options: VpnStartOptions?) {
+    private class Attempt(val id: Long, val context: Context, var options: VpnStartOptions?) {
         var request: Future<*>? = null
         var deadline: Runnable? = null
         var cancelService: (() -> Unit)? = null
         var completionMessage = R.string.vpn_disconnected
         var routingCheck: RoutingCheck? = null
         var restart: Restart? = null
+        var diagnosticService: VpnService? = null
     }
 
     fun observe(observer: () -> Unit) {
@@ -104,7 +108,7 @@ internal object VpnConnection {
 
     private fun start(context: Context, options: VpnStartOptions) {
         if (phase != VpnPhase.IDLE) return
-        val attempt = Attempt(++nextAttempt, options)
+        val attempt = Attempt(++nextAttempt, context.applicationContext, options)
         active = attempt
         serviceLaunch = R.string.vpn_requesting_service
         serviceResponse = R.string.vpn_service_awaiting_reply
@@ -183,6 +187,16 @@ internal object VpnConnection {
     }
 
     fun ownsAttempt(id: Long) = active?.id == id
+
+    fun attachDiagnosticService(id: Long, service: VpnService) {
+        active?.takeIf { it.id == id }?.diagnosticService = service
+    }
+
+    fun diagnosticSession(): DiagnosticSession? {
+        val attempt = active ?: return null
+        return DiagnosticSession(attempt.options ?: return null, attempt.diagnosticService ?: return null,
+            phase == VpnPhase.HANDSHAKE)
+    }
 
     fun recovering(id: Long, message: Int) {
         val attempt = active?.takeIf { it.id == id && it.cancelService != null } ?: return
@@ -297,10 +311,16 @@ internal object VpnConnection {
         publish(phase, R.string.ip_vpn_route_checking)
     }
 
-    fun stop() {
+    fun stopFromNotification(id: Long) {
+        if (id != 0L && ownsAttempt(id)) stop(fromNotification = true)
+    }
+
+    fun stop(fromNotification: Boolean = false) {
         val attempt = active ?: return
+        VpnLaunchSettings(attempt.context).setPaused(true)
+        manualStopGeneration++
         when (phase) {
-            VpnPhase.STARTING -> stopAttempt(attempt, R.string.vpn_start_cancelled)
+            VpnPhase.STARTING -> stopAttempt(attempt, if (fromNotification) R.string.vpn_disconnected else R.string.vpn_start_cancelled)
             VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> stopAttempt(attempt, R.string.vpn_disconnected)
             VpnPhase.STOPPING -> if (attempt.restart != null) {
                 cancelReconnect(attempt, R.string.vpn_disconnected)

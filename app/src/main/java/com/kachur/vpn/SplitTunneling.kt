@@ -2,6 +2,7 @@ package com.kachur.vpn
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.drawable.Drawable
 import androidx.annotation.StringRes
 import java.text.Collator
@@ -9,34 +10,48 @@ import java.text.Collator
 internal data class VpnRoutingSettings(val apps: Set<String>, val ipRoutes: Set<String>)
 
 internal class SplitTunnelingSettings(context: Context) {
-    private val preferences = context.getSharedPreferences("split_tunneling", Context.MODE_PRIVATE)
+    internal val preferences = context.applicationContext.getSharedPreferences("split_tunneling", Context.MODE_PRIVATE)
 
     fun excludedPackages(): Set<String> =
         preferences.getStringSet("excluded_packages", emptySet()).orEmpty().toSet()
 
-    fun ipRoutes(): Set<String> =
+    fun manualIpRoutes(): Set<String> =
         preferences.getStringSet("direct_ip_routes", emptySet()).orEmpty().toSet()
 
-    fun snapshot() = VpnRoutingSettings(excludedPackages(), ipRoutes())
+    fun ipRoutes(): Set<String> = manualIpRoutes() + preferences.getStringSet(DOWNLOADED_IP_ROUTES, emptySet()).orEmpty()
+
+    fun snapshot() = synchronized(ipSettingsLock) { VpnRoutingSettings(excludedPackages(), ipRoutes()) }
 
     // Only canonical prefixes reach this store. Perform edits on the main thread.
-    fun addIpRoutes(routes: Set<String>): Int {
-        val current = ipRoutes()
+    fun addIpRoutes(routes: Set<String>): Int = synchronized(ipSettingsLock) {
+        val current = manualIpRoutes()
         val updated = current + routes
         if (updated.size > IpRouteImport.MAX_ENTRIES) throw IpImportException(IpImportError.LIMIT)
         if (updated.size != current.size) preferences.edit().putStringSet("direct_ip_routes", updated).apply()
-        return updated.size - current.size
+        updated.size - current.size
     }
 
-    fun removeIpRoute(route: String) {
-        val current = ipRoutes()
+    fun removeIpRoute(route: String) = synchronized(ipSettingsLock) {
+        val current = manualIpRoutes()
         if (route in current) preferences.edit().putStringSet("direct_ip_routes", current - route).apply()
     }
 
-    fun setExcluded(packageName: String, excluded: Boolean) {
+    fun setExcluded(packageName: String, excluded: Boolean) = synchronized(ipSettingsLock) {
         val selection = excludedPackages()
         val updated = if (excluded) selection + packageName else selection - packageName
         if (updated != selection) preferences.edit().putStringSet("excluded_packages", updated).apply()
+    }
+
+    fun putRules(writer: SharedPreferences.Editor, apps: Set<String>, manual: Set<String>): SharedPreferences.Editor =
+        writer.putStringSet("excluded_packages", apps).putStringSet("direct_ip_routes", manual)
+
+    fun onDownloadsChanged(listener: () -> Unit) = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == DOWNLOADED_IP_ROUTES) listener()
+    }
+
+    companion object {
+        internal val ipSettingsLock = Any()
+        internal const val DOWNLOADED_IP_ROUTES = "downloaded_ip_routes"
     }
 }
 

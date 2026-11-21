@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.BroadcastReceiver
 import android.content.Intent
 import android.os.Build
 import android.text.format.DateFormat
@@ -71,7 +72,8 @@ internal class VpnNotifications(private val context: Context) {
             }
             builder.setDeleteIntent(serviceAction(ACTION_DISMISS, attempt))
             builder.addAction(Notification.Action.Builder(null, context.getString(R.string.vpn_disconnect),
-                serviceAction(ACTION_STOP, attempt)).build())
+                PendingIntent.getBroadcast(context, attempt.toInt(), Intent(context, VpnNotificationReceiver::class.java)
+                    .setAction(ACTION_STOP).putExtra(VpnConnection.EXTRA_ATTEMPT, attempt), PendingIntent.FLAG_IMMUTABLE)).build())
         } else {
             builder.setAutoCancel(true).setTimeoutAfter(60_000L)
         }
@@ -95,5 +97,13 @@ internal class VpnNotifications(private val context: Context) {
         const val ACTION_STOP = "com.kachur.vpn.STOP_VPN"
         const val ACTION_DISMISS = "com.kachur.vpn.DISMISS_VPN_NOTICE"
         private const val ERROR_ID = 2
+    }
+}
+
+class VpnNotificationReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == VpnNotifications.ACTION_STOP) {
+            VpnConnection.stopFromNotification(intent.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L))
+        }
     }
 }

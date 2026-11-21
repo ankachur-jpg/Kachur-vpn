@@ -7,6 +7,8 @@ import java.net.InetAddress
 internal data class IpRoutePrefix private constructor(val address: InetAddress, val length: Int) {
     override fun toString(): String = "${address.hostAddress}/$length"
 
+    fun contains(target: InetAddress): Boolean = address.address.size == target.address.size && from(target.address, length) == this
+
     companion object {
         fun parse(input: String): IpRoutePrefix? {
             val parts = input.trim().split('/', limit = 2)
@@ -163,6 +165,25 @@ private class PrefixTrees(prefixes: Iterable<IpRoutePrefix>) {
         }
     }
 
+    fun collapsed(): List<IpRoutePrefix> = buildList {
+        fun visit(node: PrefixTree?, path: ByteArray, depth: Int) {
+            when (node) {
+                null -> Unit
+                FullPrefix -> add(IpRoutePrefix.from(path, depth))
+                is PrefixBranch -> {
+                    val index = depth / 8
+                    val bit = 0x80 shr (depth % 8)
+                    path[index] = (path[index].toInt() and bit.inv()).toByte()
+                    visit(node.left, path, depth + 1)
+                    path[index] = (path[index].toInt() or bit).toByte()
+                    visit(node.right, path, depth + 1)
+                }
+            }
+        }
+        visit(ipv4, ByteArray(4), 0)
+        visit(ipv6, ByteArray(16), 0)
+    }
+
     private fun insert(node: PrefixTree?, bytes: ByteArray, length: Int, depth: Int): PrefixTree {
         if (depth == length || node == FullPrefix) return FullPrefix
         val right = (bytes[depth / 8].toInt() and (0x80 shr (depth % 8))) != 0
@@ -171,3 +192,5 @@ private class PrefixTrees(prefixes: Iterable<IpRoutePrefix>) {
         return if (leftChild == FullPrefix && rightChild == FullPrefix) FullPrefix else PrefixBranch(leftChild, rightChild)
     }
 }
+
+internal fun collapseIpPrefixes(prefixes: Iterable<IpRoutePrefix>): List<IpRoutePrefix> = PrefixTrees(prefixes).collapsed()

@@ -2,7 +2,6 @@ package com.kachur.vpn
 
 import java.net.Inet6Address
 import java.net.InetAddress
-import java.net.UnknownHostException
 
 /** A numeric network with host bits cleared. No hostnames are resolved. */
 internal data class IpRoutePrefix private constructor(val address: InetAddress, val length: Int) {
@@ -12,19 +11,7 @@ internal data class IpRoutePrefix private constructor(val address: InetAddress, 
         fun parse(input: String): IpRoutePrefix? {
             val parts = input.trim().split('/', limit = 2)
             val host = parts[0]
-            val bytes = if (':' in host) {
-                if (!ipv6Characters.matches(host) ||
-                    ('.' in host && parseIpv4(host.substringAfterLast(':')) == null)
-                ) return null
-                try {
-                    // A colon forces literal IPv6 parsing in InetAddress. Reject mapped IPv4.
-                    (InetAddress.getByName(host) as? Inet6Address)?.address ?: return null
-                } catch (_: UnknownHostException) {
-                    return null
-                }
-            } else {
-                parseIpv4(host) ?: return null
-            }
+            val bytes = (if (':' in host) parseIpv6(host) else parseIpv4(host)) ?: return null
             val width = bytes.size * 8
             val length = if (parts.size == 1) width else {
                 val text = parts[1]
@@ -60,8 +47,42 @@ internal data class IpRoutePrefix private constructor(val address: InetAddress, 
                 number.toByte()
             }
         }
+
+        private fun parseIpv6(input: String): ByteArray? {
+            if (!ipv6Characters.matches(input)) return null
+            val suffix = input.substringAfterLast(':')
+            val hex = if ('.' in suffix) {
+                val ipv4 = parseIpv4(suffix) ?: return null
+                fun word(index: Int) = ((ipv4[index].toInt() and 0xff) shl 8) or (ipv4[index + 1].toInt() and 0xff)
+                input.substringBeforeLast(':') + ":${word(0).toString(16)}:${word(2).toString(16)}"
+            } else input
+
+            val halves = hex.split("::", limit = 3)
+            if (halves.size > 2) return null
+            val left = parseIpv6Words(halves[0]) ?: return null
+            val right = parseIpv6Words(halves.getOrElse(1) { "" }) ?: return null
+            val missing = 8 - left.size - right.size
+            if (halves.size == 1 && missing != 0 || halves.size == 2 && missing <= 0) return null
+            val words = left + List(missing) { 0 } + right
+            val bytes = ByteArray(16) { index ->
+                val word = words[index / 2]
+                (if (index % 2 == 0) word shr 8 else word).toByte()
+            }
+            return bytes.takeUnless { it.isIpv4Mapped() }
+        }
+
+        private fun parseIpv6Words(input: String): List<Int>? {
+            if (input.isEmpty()) return emptyList()
+            return input.split(':').map { word ->
+                if (word.length !in 1..4) return null
+                word.toIntOrNull(16) ?: return null
+            }
+        }
     }
 }
+
+private fun ByteArray.isIpv4Mapped(): Boolean = size == 16 && this[10].toInt() == -1 && this[11].toInt() == -1 &&
+    (0 until 10).all { this[it].toInt() == 0 }
 
 internal class TooManyVpnRoutesException : Exception()
 
@@ -81,9 +102,7 @@ internal data class IpRoutePlan(val tunnel: List<IpRoutePrefix>, val direct: Lis
             fun emit(target: MutableList<IpRoutePrefix>, path: ByteArray, depth: Int) {
                 // IPv4-mapped addresses use IPv4 routes. Subtraction can produce this reserved
                 // IPv6 range even though imported IPv4-mapped literals are rejected.
-                if (path.size == 16 && depth >= 96 && path[10].toInt() == -1 && path[11].toInt() == -1 &&
-                    (0 until 10).all { path[it].toInt() == 0 }
-                ) return
+                if (depth >= 96 && path.isIpv4Mapped()) return
                 val prefix = IpRoutePrefix.from(path, depth)
                 // Local loopback never uses the VPN. Android refuses it as a route destination.
                 if (prefix.address.isLoopbackAddress) return

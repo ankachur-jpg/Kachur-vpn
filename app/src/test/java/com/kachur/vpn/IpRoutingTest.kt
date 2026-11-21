@@ -14,12 +14,13 @@ class IpRoutingTest {
         assertEquals("192.0.2.0/24", IpRoutePrefix.parse("192.0.2.7/24").toString())
         assertEquals("0.0.0.0/0", IpRoutePrefix.parse("192.0.2.7/0").toString())
         assertEquals(prefix("2001:db8::/48"), prefix("2001:0db8:0000:1234::abcd/48"))
+        assertEquals(prefix("::c000:207"), prefix("::192.0.2.7"))
         assertEquals(128, prefix("2001:db8::7").length)
 
         for (invalid in listOf(
             "example.test", "192.0.2", "192.0.2.256", "192.0.002.1", "192.0.2.1/33", "192.0.2.1/-1",
             "192.0.2.1/ 24", "192.0.2.1/24/24", "::ffff:192.0.2.7", "fe80::1%wlan0", "2001:db8::1/129",
-            "2001:DBX::", "2001:db8:::1",
+            "2001:DBX::", "2001:db8:::1", "2001:db8", "1:2:3:4:5:6:7:8::",
         )) assertNull(invalid, IpRoutePrefix.parse(invalid))
     }
 

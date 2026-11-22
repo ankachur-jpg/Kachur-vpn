@@ -27,12 +27,9 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(parse_handshakes("bad"), 0)
         self.assertEqual(pretty_bytes(1024), "1.0 КБ")
 
-    @patch("kachur_fedora.backend._tool", return_value="/usr/bin/awg")
-    @patch("kachur_fedora.backend._run")
-    def test_inactive(self, run, tool):
-        run.return_value = Mock(returncode=0, stdout="othervpn\n")
+    @patch("kachur_fedora.backend.Path.is_dir", return_value=False)
+    def test_inactive(self, is_dir):
         self.assertFalse(read_state("amn0").active)
-        run.assert_called_once()
 
     @patch("kachur_fedora.backend._tool", side_effect=lambda s: "/usr/bin/" + s)
     @patch("kachur_fedora.backend._run")

@@ -181,7 +181,7 @@ class MainWindow(Adw.ApplicationWindow):
             return GLib.SOURCE_REMOVE
         assert state is not None
         self.current_state = state
-        self.status.set_text("VPN включён" if state.active else "VPN выключен")
+        self.status.set_text(("Подключено • handshake подтверждён" if state.last_handshake else "Туннель запущен • handshake не проверен") if state.active else "VPN выключен")
         if state.active:
             self.status.add_css_class("kachur-connected")
             self.power.add_css_class("kachur-button-connected")

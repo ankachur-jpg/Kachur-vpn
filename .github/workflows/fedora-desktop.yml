@@ -1,0 +1,27 @@
+name: Fedora desktop backend tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'desktop/fedora/**'
+      - '.github/workflows/fedora-desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/fedora/**'
+      - '.github/workflows/fedora-desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run backend unit tests (no root or VPN needed)
+        run: |
+          PYTHONPATH=desktop/fedora python3 -m unittest discover -s desktop/fedora/tests -v
+      - name: Syntax check
+        run: |
+          python3 -m compileall -q desktop/fedora/kachur_fedora

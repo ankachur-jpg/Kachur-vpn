@@ -101,15 +101,16 @@ class MainWindow(Adw.ApplicationWindow):
         profile_card.add_css_class("kachur-card")
         profile_card.append(label("Имя VPN-интерфейса"))
         self.profile = Gtk.Entry()
-        self.profile.set_text("amn0")
+        self.profile.set_text("kch0")
         self.profile.set_max_length(15)
-        self.profile.set_placeholder_text("Например, amn0")
+        self.profile.set_placeholder_text("Интерфейс Kachur: kch0")
         self.profile.add_css_class("kachur-entry")
-        self.profile.connect("activate", lambda *_: self.refresh())
+        self.profile.set_editable(False)
         profile_card.append(self.profile)
         profile_card.append(label(
-            "Пока используется уже настроенный профиль /etc/amneziawg/<имя>.conf. "
-            "Импорт файлов и менеджер серверов добавим в следующем этапе.",
+            "Для Kachur зарезервирован отдельный интерфейс kch0 и профиль "
+            "/etc/amnezia/amneziawg/kch0.conf. Существующий интерфейс amn0 "
+            "приложения AmneziaVPN не затрагивается.",
             "kachur-subtitle",
         ))
         body.append(profile_card)

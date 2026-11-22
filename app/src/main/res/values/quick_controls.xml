@@ -1,0 +1,20 @@
+<resources>
+    <string name="vpn_control_title">%1$s — %2$s</string>
+    <string name="vpn_control_off">Выключен</string>
+    <string name="vpn_control_connecting">Подключение…</string>
+    <string name="vpn_control_connected">Подключён</string>
+    <string name="vpn_control_enable">Включить VPN</string>
+    <string name="vpn_control_channel">Управление отключённым VPN</string>
+    <string name="vpn_control_when_off">Уведомление, когда VPN выключен</string>
+    <string name="vpn_quick_preparing">Загружаем выбранный VPN-профиль…</string>
+    <string name="vpn_quick_interrupted">Запуск прерван. Нажмите «Включить VPN» ещё раз.</string>
+    <string name="vpn_tile_add">Добавить в быстрые настройки</string>
+    <string name="vpn_tile_added">Плитка Kachur VPN добавлена.</string>
+    <string name="vpn_tile_already_added">Плитка Kachur VPN уже добавлена.</string>
+    <string name="vpn_tile_request_failed">Откройте редактор быстрых настроек, чтобы добавить плитку Kachur VPN.</string>
+    <string name="vpn_tile_add_manually">Разверните быстрые настройки, нажмите «Изменить» и перенесите плитку Kachur VPN в активную область.</string>
+    <item type="id" name="vpn_control_when_off" />
+    <item type="id" name="vpn_tile_add" />
+    <item type="id" name="vpn_quick_status" />
+    <item type="id" name="vpn_quick_close" />
+</resources>

@@ -1,0 +1,31 @@
+<resources>
+    <string name="vpn_timing_title">Время этапов подключения</string>
+    <string name="vpn_timing_app">Кнопка приложения</string>
+    <string name="vpn_timing_tile">Плитка · от вызова Android onClick</string>
+    <string name="vpn_timing_notification">Уведомление · от открытия окна</string>
+    <string name="vpn_timing_row">+%1$d мс · %2$s</string>
+    <string name="vpn_timing_window_requested">Запрошено окно запуска</string>
+    <string name="vpn_timing_window_resumed">Окно готово</string>
+    <string name="vpn_timing_profile_lookup">Поиск выбранного профиля</string>
+    <string name="vpn_timing_profile_cached">Выбранный профиль получен из памяти</string>
+    <string name="vpn_timing_profile_read">Выбранный профиль прочитан из хранилища</string>
+    <string name="vpn_timing_permission_check">Проверка разрешения VPN</string>
+    <string name="vpn_timing_permission_checked">Android ответил на проверку разрешения</string>
+    <string name="vpn_timing_consent_dialog">Открыт системный запрос разрешения</string>
+    <string name="vpn_timing_consent_result">Получен ответ на системный запрос</string>
+    <string name="vpn_timing_routes_ready">Снимок правил маршрутизации готов</string>
+    <string name="vpn_timing_service_requested">Запуск VPN-службы поставлен в очередь</string>
+    <string name="vpn_timing_service_call">Вызов startForegroundService()</string>
+    <string name="vpn_timing_service_accepted">Android принял запуск службы</string>
+    <string name="vpn_timing_service_restricted">Android ограничил фоновый запуск</string>
+    <string name="vpn_timing_service_entered">VPN-служба получила запрос</string>
+    <string name="vpn_timing_foreground_ready">Foreground-служба готова</string>
+    <string name="vpn_timing_config_check">Проверка конфигурации и маршрутов</string>
+    <string name="vpn_timing_config_ready">Конфигурация и маршруты готовы</string>
+    <string name="vpn_timing_engine_ready">Движок AmneziaWG готов</string>
+    <string name="vpn_timing_tunnel_up">Туннель поднят</string>
+    <string name="vpn_timing_handshake_requested">Запущен обмен с сервером</string>
+    <string name="vpn_timing_first_sample">Первое чтение состояния handshake</string>
+    <string name="vpn_timing_handshake_confirmed">Handshake подтверждён</string>
+    <string name="vpn_timing_ended">Попытка завершена</string>
+</resources>

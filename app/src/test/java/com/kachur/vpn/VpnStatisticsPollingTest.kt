@@ -21,6 +21,51 @@ import java.time.Duration
 @Config(sdk = [34], application = TestKachurApplication::class)
 class VpnStatisticsPollingTest {
     @Test
+    fun backgroundHandshakeReadsAreFastOnlyForTheProbeWindow() {
+        val main = Looper.getMainLooper()
+        var reads = 0
+        val polling = VpnStatisticsPolling(Handler(main), fast = false) { finished ->
+            reads++
+            finished()
+        }
+        try {
+            polling.start(probingHandshake = true)
+            shadowOf(main).idleFor(Duration.ofMillis(249))
+            assertEquals(0, reads)
+            shadowOf(main).idleFor(Duration.ofMillis(1))
+            assertEquals(1, reads)
+            shadowOf(main).idleFor(Duration.ofMillis(5_750))
+            assertEquals(24, reads)
+            shadowOf(main).idleFor(Duration.ofMillis(59_999))
+            assertEquals(24, reads)
+            shadowOf(main).idleFor(Duration.ofMillis(1))
+            assertEquals(25, reads)
+        } finally {
+            polling.stop()
+        }
+    }
+
+    @Test
+    fun handshakeConfirmationReturnsToBackgroundCadenceImmediately() {
+        val main = Looper.getMainLooper()
+        var reads = 0
+        val polling = VpnStatisticsPolling(Handler(main), fast = false) { finished ->
+            reads++
+            finished()
+        }
+        try {
+            polling.start(probingHandshake = true)
+            polling.handshakeObserved()
+            shadowOf(main).idleFor(Duration.ofMillis(250))
+            assertEquals(1, reads)
+            shadowOf(main).idleFor(Duration.ofSeconds(10))
+            assertEquals(1, reads)
+        } finally {
+            polling.stop()
+        }
+    }
+
+    @Test
     fun screenOffOrHiddenUiSlowsPollingAndReturningRefreshesImmediately() {
         val application = RuntimeEnvironment.getApplication() as KachurApplication
         val power = shadowOf(application.getSystemService(PowerManager::class.java))

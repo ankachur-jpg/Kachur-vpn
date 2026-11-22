@@ -10,13 +10,9 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
-import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputFilter
 import android.text.SpannableString
@@ -38,12 +34,9 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.lifecycle.ViewModelProvider
-import java.util.UUID
-import java.util.concurrent.Future
 
 class MainActivity : KachurActivity() {
     private lateinit var session: ImportSession
@@ -84,31 +77,15 @@ class MainActivity : KachurActivity() {
     private val vpnObserver: () -> Unit = ::renderConnection
     private val splitSettings by lazy { SplitTunnelingSettings(applicationContext) }
     private val downloadsObserver by lazy { splitSettings.onDownloadsChanged(::renderConnection) }
-    private val main = Handler(Looper.getMainLooper())
     private var resumed = false
-    private var permissionRequest: PermissionRequest? = null
+    private val consent by lazy { VpnConsent(this, ::showPermissionMessage, ::startWithPermission) }
     private var pendingProfileConnection: ProfileConnectionRequest? = null
-    private val permissionPending: Boolean
-        get() = permissionRequest?.let { it.dialogLaunched && !it.resultReceived } == true
     private var permissionMessage: Int? = null
     private var manualStopSeen = VpnConnection.manualStopGeneration
     private val launchSettings by lazy { VpnLaunchSettings(applicationContext) }
     private val labels by lazy { VpnProfileLabels(applicationContext) }
     private val notificationSettings by lazy { getSharedPreferences("vpn_notifications", MODE_PRIVATE) }
-
-    private class PermissionRequest(
-        val key: String = "vpn-permission-${UUID.randomUUID()}",
-        val resetGeneration: Long = VpnConnection.resetGeneration,
-        val automatic: Boolean = false,
-        val profileId: String? = null,
-    ) {
-        var dialogLaunched = false
-        var resultReceived = false
-        var launcher: ActivityResultLauncher<Intent>? = null
-        var check: Future<*>? = null
-        var deadline: Runnable? = null
-        var onResume: (() -> Unit)? = null
-    }
+    private val controlNotification by lazy { (application as KachurApplication).controlNotification }
 
     private val openConfig = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         session.handlePickerResult(applicationContext, result.resultCode, result.data)
@@ -139,21 +116,6 @@ class MainActivity : KachurActivity() {
             }
         }
         permissionMessage = savedInstanceState?.getInt(PERMISSION_MESSAGE, 0)?.takeIf { it != 0 }
-        val savedPermissionKey = savedInstanceState?.getString(PERMISSION_REQUEST_KEY)
-        if (savedInstanceState != null && savedPermissionKey != null &&
-            savedInstanceState.getLong(PERMISSION_RESET_GENERATION) == VpnConnection.resetGeneration
-        ) {
-            permissionRequest = PermissionRequest(savedPermissionKey, automatic = savedInstanceState.getBoolean(PERMISSION_AUTOMATIC),
-                profileId = savedInstanceState.getString(PERMISSION_PROFILE)).apply {
-                dialogLaunched = true
-                resultReceived = savedInstanceState.getBoolean(PERMISSION_RESULT_RECEIVED)
-            }
-        } else if (savedInstanceState?.getBoolean(PERMISSION_PENDING) == true) {
-            // An instance saved by an older build has no per-request registration to restore.
-            permissionMessage = R.string.vpn_permission_no_result
-            VpnConnection.record(R.string.vpn_permission_no_result, VpnError(R.string.vpn_permission_no_result))
-        }
-
         if (!session.busy && savedInstanceState != null) {
             when {
                 savedInstanceState.getBoolean(IMPORT_IN_PROGRESS) -> session.finish(R.string.import_interrupted)
@@ -170,15 +132,7 @@ class MainActivity : KachurActivity() {
         }
         render()
         renderNotificationAccess()
-        permissionRequest?.let { request ->
-            armPermissionDeadline(request, PERMISSION_RESULT_TIMEOUT_MS)
-            if (permissionPending) {
-                showPermissionMessage(R.string.vpn_waiting_permission)
-                registerPermissionResult(request)
-            } else {
-                showPermissionMessage(R.string.vpn_permission_check_return)
-            }
-        }
+        consent.restore(savedInstanceState)
     }
 
     override fun onStart() {
@@ -200,15 +154,7 @@ class MainActivity : KachurActivity() {
     override fun onPostResume() {
         super.onPostResume()
         resumed = true
-        permissionRequest?.takeIf(::isCurrentRequest)?.let { request ->
-            val action = request.onResume
-            request.onResume = null
-            if (action != null) {
-                action()
-            } else if (request.dialogLaunched && request.check == null) {
-                checkPermission(request, allowDialog = false)
-            }
-        }
+        consent.resume()
         if (session.picking) {
             // Registry results are delivered by this point when Android returns from the picker.
             session.finish(R.string.picker_no_callback)
@@ -230,6 +176,7 @@ class MainActivity : KachurActivity() {
 
     override fun onPause() {
         resumed = false
+        consent.pause()
         super.onPause()
     }
 
@@ -240,22 +187,16 @@ class MainActivity : KachurActivity() {
         // The picker callback is restored by ActivityResultRegistry. A background read cannot be restored.
         outState.putBoolean(IMPORT_IN_PROGRESS, session.reading)
         outState.putBoolean(PICKER_IN_PROGRESS, session.picking)
-        permissionRequest?.takeIf { it.dialogLaunched }?.let {
-            outState.putString(PERMISSION_REQUEST_KEY, it.key)
-            outState.putBoolean(PERMISSION_RESULT_RECEIVED, it.resultReceived)
-            outState.putLong(PERMISSION_RESET_GENERATION, it.resetGeneration)
-            outState.putBoolean(PERMISSION_AUTOMATIC, it.automatic)
-            outState.putString(PERMISSION_PROFILE, it.profileId)
-        }
+        consent.save(outState)
         pendingProfileConnection?.let {
             outState.putString(ProfilesActivity.PROFILE_ID, it.id)
             outState.putLong(ProfilesActivity.STOP_GENERATION, it.stopGeneration)
         }
-        if (permissionRequest == null) permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
+        if (!consent.busy) permissionMessage?.let { outState.putInt(PERMISSION_MESSAGE, it) }
     }
 
     override fun onDestroy() {
-        permissionRequest?.let(::clearPermissionRequest)
+        consent.cancel(preserveTrace = isChangingConfigurations)
         session.onChange = null
         super.onDestroy()
     }
@@ -433,6 +374,7 @@ class MainActivity : KachurActivity() {
             details.visibility = if (detailsOpen) View.VISIBLE else View.GONE
             chevron.rotation = if (detailsOpen) 90f else 0f
             ViewCompat.setStateDescription(this, getString(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details))
+            if (detailsOpen) renderConnection()
         }
     }
 
@@ -446,7 +388,7 @@ class MainActivity : KachurActivity() {
         uiAdd(uiButton(R.string.vpn_reset_connection).apply {
             id = R.id.reset_vpn_button
             setOnClickListener {
-                permissionRequest?.let(::clearPermissionRequest)
+                consent.cancel()
                 pendingProfileConnection = null
                 permissionMessage = null
                 launchSettings.setPaused(true)
@@ -478,8 +420,8 @@ class MainActivity : KachurActivity() {
                         if (checked) {
                             session.openChecked = false
                             maybeAutoConnect()
-                        } else if (permissionRequest?.automatic == true) {
-                            permissionRequest?.let(::clearPermissionRequest)
+                        } else if (consent.automatic) {
+                            consent.cancel()
                             permissionMessage = null
                         }
                         renderConnection()
@@ -497,11 +439,26 @@ class MainActivity : KachurActivity() {
                 }
             }
             uiAdd(autoRecovery)
+            uiAdd(Switch(this@MainActivity).apply {
+                id = R.id.vpn_control_when_off
+                uiSwitch()
+                setText(R.string.vpn_control_when_off)
+                isSaveEnabled = false
+                isChecked = controlNotification.enabled
+                setOnCheckedChangeListener { _, checked ->
+                    controlNotification.setEnabled(checked)
+                    renderNotificationAccess()
+                }
+            })
             notificationAccess = uiButton(R.string.vpn_notification_access).apply {
                 id = R.id.vpn_notification_access
                 setOnClickListener { openNotificationAccess() }
             }
             uiAdd(notificationAccess, 8)
+            uiAdd(uiSettingsLink(R.string.vpn_tile_add, R.drawable.ic_vpn_tile).apply {
+                id = R.id.vpn_tile_add
+                setOnClickListener { requestVpnTile() }
+            }, 10)
         }, 14)
         profileSettings = uiCard().apply {
             uiAdd(uiHeading(R.string.ui_selected_server))
@@ -550,7 +507,7 @@ class MainActivity : KachurActivity() {
     }
 
     private fun showProfiles() {
-        if (!session.busy && permissionRequest == null) {
+        if (!session.busy && !VpnConnection.preparing) {
             openProfiles.launch(Intent(this, ProfilesActivity::class.java))
         }
     }
@@ -650,14 +607,11 @@ class MainActivity : KachurActivity() {
     private fun renderConnection() {
         if (manualStopSeen != VpnConnection.manualStopGeneration) {
             manualStopSeen = VpnConnection.manualStopGeneration
-            permissionRequest?.let(::clearPermissionRequest)
             if (pendingProfileConnection?.stopGeneration != manualStopSeen) pendingProfileConnection = null
             permissionMessage = null
+            consent.cancel()
         }
-        permissionRequest?.takeIf { it.resetGeneration != VpnConnection.resetGeneration }?.let {
-            clearPermissionRequest(it)
-            permissionMessage = null
-        }
+        if (consent.cancelIfInvalid()) permissionMessage = null
         val phase = VpnConnection.phase
         val runningId = VpnConnection.activeProfileId
         val tunnelName = if (runningId != null && runningId != session.profile?.documentKey) {
@@ -667,12 +621,12 @@ class MainActivity : KachurActivity() {
         if (tunnelName != null) activeProfile.text = getString(R.string.profiles_active_tunnel, tunnelName)
         serverCard.contentDescription = listOfNotNull(serverCountry.text, profileName.text,
             activeProfile.text.takeIf { tunnelName != null }).joinToString(". ")
-        serverCard.isEnabled = !session.busy && permissionRequest == null
+        serverCard.isEnabled = !session.busy && !VpnConnection.preparing
         autoConnect.isChecked = launchSettings.enabled
         autoConnect.setText(if (launchSettings.enabled && launchSettings.paused) R.string.vpn_auto_paused else R.string.vpn_auto_connect)
         autoRecovery.isChecked = launchSettings.recoveryEnabled
         val blocked = connectionButtonBlockReason()
-        importButton.isEnabled = !session.busy && permissionRequest == null && phase == VpnPhase.IDLE
+        importButton.isEnabled = !session.busy && !VpnConnection.preparing && phase == VpnPhase.IDLE
         profileCountry.isEnabled = importButton.isEnabled
         connectButton.isEnabled = blocked == null
         reconnectButton.isEnabled = !VpnConnection.checkingRoutes
@@ -681,32 +635,35 @@ class MainActivity : KachurActivity() {
         } else {
             View.GONE
         }
-        val error = VpnConnection.currentError != null ||
-            (phase == VpnPhase.IDLE && permissionMessage != null && VpnConnection.lastError?.category == permissionMessage)
+        val error = if (phase == VpnPhase.IDLE && VpnConnection.preparing) false else
+            VpnConnection.currentError != null ||
+                (phase == VpnPhase.IDLE && permissionMessage != null && VpnConnection.lastError?.category == permissionMessage)
         renderPower(phase, blocked, error)
         renderProtection(phase, error)
         renderTraffic()
-        connectionDiagnostics.text = getString(
+        val summary = getString(
             R.string.vpn_diagnostic_summary,
             VpnConnection.eventNumber,
             getString(VpnConnection.lastEvent),
             getString(phase.label),
-            permissionPending.toString(),
+            VpnConnection.awaitingConsent.toString(),
             getString(blocked ?: R.string.vpn_button_available),
             getString(VpnConnection.serviceLaunch),
             getString(VpnConnection.serviceResponse),
             VpnConnection.lastError?.display(this) ?: getString(R.string.vpn_no_error),
         )
+        val timing = if (detailsOpen) VpnStartupTiming.display(this) else ""
+        connectionDiagnostics.text = if (timing.isEmpty()) summary else "$summary\n\n$timing"
     }
 
     private fun renderPower(phase: VpnPhase, blocked: Int?, error: Boolean) {
         val state = when {
+            VpnConnection.noticeStatus == VpnNoticeStatus.CONNECTED -> R.string.vpn_notice_connected
+            VpnConnection.noticeStatus == VpnNoticeStatus.STOPPING -> R.string.vpn_phase_stopping
             error -> R.string.vpn_notice_error
-            permissionRequest != null || phase == VpnPhase.STARTING -> R.string.vpn_notice_connecting
             phase == VpnPhase.WAITING -> R.string.ui_power_waiting
-            phase == VpnPhase.HANDSHAKE -> R.string.vpn_notice_connected
-            phase == VpnPhase.RECOVERING -> R.string.ui_power_recovering
-            phase == VpnPhase.STOPPING -> R.string.vpn_phase_stopping
+            VpnConnection.noticeStatus == VpnNoticeStatus.CONNECTING -> R.string.vpn_control_connecting
+            VpnConnection.noticeStatus == VpnNoticeStatus.RECONNECTING -> R.string.ui_power_recovering
             else -> R.string.vpn_disconnected
         }
         val action = getString(blocked ?: when (phase) {
@@ -718,8 +675,8 @@ class MainActivity : KachurActivity() {
         val description = getString(R.string.ui_power_accessible, label, action)
         if (connectButton.contentDescription != description) connectButton.contentDescription = description
         val tone = when {
-            error -> PowerTone.ERROR
             phase == VpnPhase.HANDSHAKE -> PowerTone.ACTIVE
+            error -> PowerTone.ERROR
             else -> PowerTone.READY
         }
         val compact = powerHalo == null
@@ -745,16 +702,18 @@ class MainActivity : KachurActivity() {
     }
 
     private fun renderProtection(phase: VpnPhase, error: Boolean) {
-        val protected = phase == VpnPhase.HANDSHAKE && !error
-        val status = if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message
+        val protected = phase == VpnPhase.HANDSHAKE
+        val status = if (phase == VpnPhase.IDLE) {
+            VpnConnection.preparationMessage ?: permissionMessage ?: VpnConnection.message
+        } else VpnConnection.message
         val title = when {
             protected -> R.string.ui_protection_active
             error -> R.string.vpn_notice_error
-            phase == VpnPhase.IDLE && permissionRequest == null -> R.string.ui_protection_inactive
+            phase == VpnPhase.IDLE && !VpnConnection.preparing -> R.string.ui_protection_inactive
             else -> R.string.ui_protection_progress
         }
         val hint = when {
-            protected -> R.string.ui_protection_summary
+            protected && !error -> R.string.ui_protection_summary
             status == R.string.vpn_disconnected -> R.string.ui_protection_hint
             else -> null
         }
@@ -800,10 +759,10 @@ class MainActivity : KachurActivity() {
 
     private fun renderNotificationAccess() {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val channelBlocked = manager.getNotificationChannel(VpnNotifications.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
-        val enabled = manager.areNotificationsEnabled() && !channelBlocked
+        val enabled = manager.areNotificationsEnabled() && blockedNotificationChannel(manager) == null
         val becameEnabled = enabled && notificationAccess.visibility == View.VISIBLE
         notificationAccess.visibility = if (enabled) View.GONE else View.VISIBLE
+        controlNotification.sync(force = becameEnabled)
         if (becameEnabled) VpnConnection.refreshNotification()
     }
 
@@ -819,27 +778,31 @@ class MainActivity : KachurActivity() {
                 return
             }
             val manager = getSystemService(NotificationManager::class.java)
-            val channelBlocked = manager?.areNotificationsEnabled() == true &&
-                manager.getNotificationChannel(VpnNotifications.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
-            val intent = if (channelBlocked) Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_CHANNEL_ID, VpnNotifications.CHANNEL) else Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+            val channel = manager?.takeIf { it.areNotificationsEnabled() }?.let(::blockedNotificationChannel)
+            val intent = if (channel != null) Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_CHANNEL_ID, channel) else Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
             startActivity(intent.putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
         } catch (_: RuntimeException) {
             Toast.makeText(this, R.string.vpn_notification_settings_unavailable, Toast.LENGTH_SHORT).show()
         }
     }
 
+    private fun blockedNotificationChannel(manager: NotificationManager): String? =
+        listOfNotNull(VpnNotifications.CHANNEL, VpnNotifications.CONTROL_CHANNEL.takeIf { controlNotification.enabled })
+            .firstOrNull { manager.getNotificationChannel(it)?.importance == NotificationManager.IMPORTANCE_NONE }
+
     private fun connectionButtonBlockReason(): Int? = when {
         session.picking -> R.string.vpn_blocked_import_picker
         session.reading -> R.string.vpn_blocked_import_read
         session.restoring -> R.string.vpn_blocked_profile_restore
-        permissionPending -> R.string.vpn_blocked_permission_result
-        permissionRequest != null -> R.string.vpn_blocked_permission_check
+        VpnConnection.awaitingConsent -> R.string.vpn_blocked_permission_result
+        VpnConnection.preparing -> R.string.vpn_blocked_permission_check
         VpnConnection.phase == VpnPhase.STOPPING -> R.string.vpn_blocked_stopping
         else -> null
     }
 
     private fun toggleVpn() {
+        val startedAt = SystemClock.elapsedRealtime()
         if (connectionButtonBlockReason() != null) return
         permissionMessage = null
         VpnConnection.record(R.string.vpn_connect_pressed)
@@ -852,21 +815,23 @@ class MainActivity : KachurActivity() {
             return
         }
         session.openChecked = true
-        requestConnection(automatic = false)
+        val startup = VpnStartupTiming.begin(VpnStartSource.APP, startedAt)
+        startup.mark(VpnStartStage.PROFILE_CACHED)
+        if (!consent.begin(automatic = false, startup = startup)) startup.mark(VpnStartStage.ENDED)
     }
 
     private fun maybeAutoConnect() {
         if (!resumed || session.openChecked || session.busy) return
         session.openChecked = true
-        if (!launchSettings.enabled || launchSettings.paused || permissionRequest != null ||
+        if (!launchSettings.enabled || launchSettings.paused || VpnConnection.preparing ||
             session.profile == null || VpnConnection.phase != VpnPhase.IDLE
         ) return
-        requestConnection(automatic = true)
+        consent.begin(automatic = true)
     }
 
     private fun connectSelectedProfile() {
         val pending = pendingProfileConnection ?: return
-        if (!resumed || session.busy || permissionRequest != null) return
+        if (!resumed || session.busy || VpnConnection.preparing) return
         pendingProfileConnection = null
         if (pending.stopGeneration != VpnConnection.manualStopGeneration) return
         if (pending.id != session.profile?.documentKey) {
@@ -874,132 +839,36 @@ class MainActivity : KachurActivity() {
             return
         }
         if (VpnConnection.activeProfileId == pending.id) return
-        requestConnection(automatic = false, profileId = pending.id)
+        consent.begin(automatic = false, profileId = pending.id)
     }
 
-    private fun requestConnection(automatic: Boolean, profileId: String? = null) {
-        val request = PermissionRequest(automatic = automatic, profileId = profileId)
-        permissionRequest = request
-        armPermissionDeadline(request, PERMISSION_CHECK_TIMEOUT_MS)
-        checkPermission(request, allowDialog = true)
-    }
-
-    private fun checkPermission(request: PermissionRequest, allowDialog: Boolean) {
-        showPermissionMessage(if (allowDialog) R.string.vpn_permission_check else R.string.vpn_permission_check_return)
-        val context = applicationContext
-        request.check = VpnConnection.systemCalls.submit {
-            try {
-                if (request.automatic && allowDialog && existingSystemVpn(context)) {
-                    main.post { finishPermissionRequest(request, R.string.vpn_auto_other_vpn, error = false) }
-                    return@submit
-                }
-                val consent = VpnService.prepare(context)
-                main.post {
-                    if (!isCurrentRequest(request)) return@post
-                    request.check = null
-                    when {
-                        consent == null -> runWhenResumed(request) { startWithPermission(request) }
-                        allowDialog -> runWhenResumed(request) { launchPermissionDialog(request, consent) }
-                        else -> finishPermissionRequest(request, R.string.vpn_permission_no_result)
-                    }
-                }
-            } catch (_: RuntimeException) {
-                main.post { finishPermissionRequest(request, R.string.vpn_permission_unavailable) }
-            }
-        }
-    }
-
-    private fun launchPermissionDialog(request: PermissionRequest, consent: Intent) {
-        request.dialogLaunched = true
-        armPermissionDeadline(request, PERMISSION_RESULT_TIMEOUT_MS)
-        showPermissionMessage(R.string.vpn_waiting_permission)
-        try {
-            registerPermissionResult(request)?.launch(consent)
-        } catch (_: RuntimeException) {
-            finishPermissionRequest(request, R.string.vpn_permission_unavailable)
-        }
-    }
-
-    private fun registerPermissionResult(request: PermissionRequest): ActivityResultLauncher<Intent>? {
-        // A fresh registry key keeps a result from a cancelled dialog out of a later attempt.
-        val launcher = activityResultRegistry.register(request.key, ActivityResultContracts.StartActivityForResult()) { result ->
-            if (!isCurrentRequest(request) || request.resultReceived) return@register
-            request.resultReceived = true
-            when (result.resultCode) {
-                Activity.RESULT_OK -> {
-                    showPermissionMessage(R.string.vpn_permission_result_ok)
-                    if (request.check == null) {
-                        runWhenResumed(request) { checkPermission(request, allowDialog = false) }
-                    }
-                }
-                Activity.RESULT_CANCELED -> finishPermissionRequest(request, R.string.vpn_permission_denied)
-                else -> finishPermissionRequest(request, R.string.vpn_permission_unexpected_result)
-            }
-        }
-        // register() can immediately deliver a result restored by the registry.
-        if (!isCurrentRequest(request)) {
-            launcher.unregister()
-            return null
-        }
-        request.launcher = launcher
-        return launcher
-    }
-
-    private fun startWithPermission(request: PermissionRequest) {
-        clearPermissionRequest(request)
+    private fun startWithPermission(automatic: Boolean, profileId: String?, startup: VpnStartupTrace?) {
         permissionMessage = null
-        if ((request.profileId == null && VpnConnection.phase != VpnPhase.IDLE) ||
-            (request.automatic && (!launchSettings.enabled || launchSettings.paused))
+        if ((profileId == null && VpnConnection.phase != VpnPhase.IDLE) ||
+            (automatic && (!launchSettings.enabled || launchSettings.paused))
         ) {
+            startup?.mark(VpnStartStage.ENDED)
             renderConnection()
             return
         }
         VpnConnection.record(R.string.vpn_permission_granted)
         val profile = session.profile
         if (profile == null) {
+            startup?.mark(VpnStartStage.ENDED)
             showPermissionMessage(R.string.vpn_profile_required, error = true)
-        } else if ((request.profileId != null && request.profileId != profile.documentKey) ||
+        } else if ((profileId != null && profileId != profile.documentKey) ||
             session.savedRevision != applicationContext.localProfiles().revision()
         ) {
+            startup?.mark(VpnStartStage.ENDED)
             showPermissionMessage(R.string.profiles_selection_changed, error = true)
         } else if (VpnConnection.phase == VpnPhase.IDLE) {
-            if (!request.automatic) launchSettings.setPaused(false)
-            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey), profile.documentKey, profile.name)
+            if (!automatic) launchSettings.setPaused(false)
+            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey),
+                profile.documentKey, profile.name, startup = startup)
         } else {
             VpnConnection.switchProfile(applicationContext, profile, labels.country(profile.documentKey), session.savedRevision)
         }
         renderConnection()
-    }
-
-    private fun runWhenResumed(request: PermissionRequest, action: () -> Unit) {
-        if (resumed) action() else request.onResume = action
-    }
-
-    private fun armPermissionDeadline(request: PermissionRequest, timeout: Long) {
-        request.deadline?.let(main::removeCallbacks)
-        val deadline = Runnable {
-            val error = if (permissionPending) R.string.vpn_permission_result_timeout else R.string.vpn_permission_check_timeout
-            finishPermissionRequest(request, error)
-        }
-        request.deadline = deadline
-        main.postDelayed(deadline, timeout)
-    }
-
-    private fun finishPermissionRequest(request: PermissionRequest, message: Int, error: Boolean = true) {
-        if (!isCurrentRequest(request)) return
-        clearPermissionRequest(request)
-        showPermissionMessage(message, error)
-    }
-
-    private fun isCurrentRequest(request: PermissionRequest): Boolean =
-        permissionRequest === request && request.resetGeneration == VpnConnection.resetGeneration
-
-    private fun clearPermissionRequest(request: PermissionRequest) {
-        permissionRequest = null
-        request.onResume = null
-        request.check?.cancel(true)
-        request.deadline?.let(main::removeCallbacks)
-        request.launcher?.unregister()
     }
 
     private fun showPermissionMessage(message: Int, error: Boolean = false) {
@@ -1008,22 +877,8 @@ class MainActivity : KachurActivity() {
         renderConnection()
     }
 
-    private fun existingSystemVpn(context: android.content.Context): Boolean {
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
-        val network = manager.activeNetwork ?: return false
-        return manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
-    }
-
     private companion object {
-        const val PERMISSION_PENDING = "vpn_permission_pending"
-        const val PERMISSION_REQUEST_KEY = "vpn_permission_request_key"
-        const val PERMISSION_RESET_GENERATION = "vpn_permission_reset_generation"
-        const val PERMISSION_RESULT_RECEIVED = "vpn_permission_result_received"
-        const val PERMISSION_AUTOMATIC = "vpn_permission_automatic"
-        const val PERMISSION_PROFILE = "vpn_permission_profile"
         const val PERMISSION_MESSAGE = "vpn_permission_message"
-        const val PERMISSION_CHECK_TIMEOUT_MS = 30_000L
-        const val PERMISSION_RESULT_TIMEOUT_MS = 60_000L
         const val PICKER_IN_PROGRESS = "config_picker_in_progress"
         const val IMPORT_IN_PROGRESS = "config_import_in_progress"
         const val NOTIFICATION_ASKED = "post_notifications_asked"

@@ -18,10 +18,13 @@ import javax.crypto.spec.GCMParameterSpec
 open class KachurApplication : Application() {
     internal val profiles by lazy { LocalProfiles(this, ::profileKey) }
     internal val visibility = AppVisibility(this)
+    internal val controlNotification by lazy { VpnControlNotification(this) }
 
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(visibility)
+        VpnConnection.observe { controlNotification.sync() }
+        controlNotification.sync()
     }
 
     @Synchronized
@@ -98,26 +101,37 @@ internal object ProfileCatalogJson {
 
 internal class StoredProfiles(val catalog: ProfileCatalog, val revision: Long)
 
+internal class SelectedVpnProfile(val profile: ImportedProfile?, val revision: Long)
+internal class VpnProfileRead(val selected: SelectedVpnProfile, val fromCache: Boolean)
+
 internal class LocalProfiles(context: Context, private val key: () -> SecretKey) {
     private val preferences = SplitTunnelingSettings(context).preferences
+    // Keep only the selected profile in memory. Its revision must match the persisted catalog.
+    private var selected: SelectedVpnProfile? = null
 
     fun revision(): Long = preferences.getLong(REVISION, 0L)
     fun exists(): Boolean = preferences.contains(CATALOG) || preferences.contains(LEGACY_PROFILE)
 
     fun load(): ImportedProfile? = read().catalog.selected
 
+    fun readSelected(): VpnProfileRead = synchronized(SplitTunnelingSettings.ipSettingsLock) {
+        selected?.takeIf { it.revision == revision() }?.let { return VpnProfileRead(it, fromCache = true) }
+        val stored = read()
+        VpnProfileRead(SelectedVpnProfile(stored.catalog.selected, stored.revision), fromCache = false)
+    }
+
     fun read(): StoredProfiles = synchronized(SplitTunnelingSettings.ipSettingsLock) {
         val revision = revision()
         val stored = preferences.getString(CATALOG, null)
-        if (stored != null) return StoredProfiles(ProfileCatalogJson.decode(open(stored, CATALOG_AAD)), revision)
-        val legacy = preferences.getString(LEGACY_PROFILE, null) ?: return StoredProfiles(ProfileCatalog.EMPTY, revision)
+        if (stored != null) return remember(ProfileCatalogJson.decode(open(stored, CATALOG_AAD)), revision)
+        val legacy = preferences.getString(LEGACY_PROFILE, null) ?: return remember(ProfileCatalog.EMPTY, revision)
         val migrated = ProfileCatalog.legacy(ProfileJson.decode(open(legacy, LEGACY_AAD)))
         // Keep the original encrypted entry until the equivalent catalog is committed.
         val next = seal(migrated)
         if (!put(preferences.edit(), next, revision).commit()) {
             preferences.edit().remove(CATALOG).putString(LEGACY_PROFILE, legacy).apply()
         }
-        StoredProfiles(migrated, revision)
+        remember(migrated, revision)
     }
 
     private fun open(encoded: String, aad: ByteArray): JSONObject {
@@ -183,11 +197,18 @@ internal class LocalProfiles(context: Context, private val key: () -> SecretKey)
             put(preferences.edit(), previous, original.revision).putString(LEGACY_PROFILE, legacy).apply()
             throw IOException()
         }
-        StoredProfiles(catalog, revision)
+        remember(catalog, revision)
     }
 
-    fun put(writer: SharedPreferences.Editor, sealed: String?, revision: Long): SharedPreferences.Editor =
-        writer.putString(CATALOG, sealed).remove(LEGACY_PROFILE).putLong(REVISION, revision)
+    private fun remember(catalog: ProfileCatalog, revision: Long): StoredProfiles {
+        selected = SelectedVpnProfile(catalog.selected, revision)
+        return StoredProfiles(catalog, revision)
+    }
+
+    fun put(writer: SharedPreferences.Editor, sealed: String?, revision: Long): SharedPreferences.Editor {
+        selected = null
+        return writer.putString(CATALOG, sealed).remove(LEGACY_PROFILE).putLong(REVISION, revision)
+    }
 
     private companion object {
         const val CATALOG = "vpn_profile_catalog_ciphertext"

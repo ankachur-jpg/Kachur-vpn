@@ -29,6 +29,7 @@ class AwgVpnService : VpnService() {
     private var attempt = 0L
     private var options: VpnStartOptions? = null
     private var country = ""
+    private var profileName: String? = null
     private var cleanupResult: Boolean? = null
     @Volatile private var generation = 0L
     @Volatile private var closing = false
@@ -43,7 +44,6 @@ class AwgVpnService : VpnService() {
     }
     private var foreground = false
     @Volatile private var notificationDismissed = false
-    private var postedError = false
     private var lastNotice: VpnNotice? = null
     private var lastNoticeRevision = VpnConnection.notificationRevision
     private var connectedAt = 0L
@@ -101,16 +101,18 @@ class AwgVpnService : VpnService() {
         VpnConnection.attachDiagnosticService(id, this)
         options = claimed
         country = claimed.country
+        profileName = claimed.profileName
         preferences.registerOnSharedPreferenceChangeListener(recoveryObserver)
         applyRecoverySetting()
         VpnConnection.observe(connectionObserver)
-        val initialNotice = VpnNotice(VpnNoticeStatus.CONNECTING, country)
+        val initialNotice = VpnNotice(VpnNoticeStatus.CONNECTING, country, profileName = profileName)
         lastNotice = initialNotice
         serviceCalls.execute {
             if (destroyed) return@execute
             try {
                 notifications.prepare()
                 startForeground(VpnNotifications.FOREGROUND_ID, notifications.build(initialNotice, id))
+                claimed.startup?.mark(VpnStartStage.FOREGROUND_READY)
             } catch (_: RuntimeException) {
                 main.post { if (!closing) VpnConnection.serviceFailed(id, R.string.vpn_foreground_error) }
                 return@execute
@@ -155,26 +157,32 @@ class AwgVpnService : VpnService() {
         }
         reportedStatsError = false
         try {
+            val trace = options.startup.takeUnless { reconnecting }
+            trace?.mark(VpnStartStage.CONFIG_CHECK)
             report(id, token, R.string.vpn_checking_profile)
             val config = options.profile.toBackendConfig(options.exclusions)
             val routePlan = options.routePlan ?: config.ipRoutePlan(options.routing.ipRoutes)
             if (!current(token)) return
+            trace?.mark(VpnStartStage.CONFIG_READY)
             report(id, token, R.string.vpn_loading_engine)
             val engine = if (routePlan == null) GoBackend(applicationContext, this)
                 else GoBackend(applicationContext, this, routePlan::configure)
             backend = engine
             if (!current(token)) return
+            trace?.mark(VpnStartStage.ENGINE_READY)
             report(id, token, R.string.vpn_starting)
             check(engine.setState(tunnel, Tunnel.State.UP, config) == Tunnel.State.UP)
             if (!current(token)) return
+            trace?.mark(VpnStartStage.TUNNEL_UP)
             // The normal empty AWG packet starts negotiation, even with PersistentKeepalive disabled.
-            val provingRecovery = reconnecting && engine.requestHandshake(tunnel)
+            val probing = engine.requestHandshake(tunnel)
+            if (probing) trace?.mark(VpnStartStage.HANDSHAKE_REQUESTED)
             main.post {
                 if (current(token)) {
                     // A profile without a peer endpoint waits for the peer to initiate.
-                    if (reconnecting && !provingRecovery) recovery.finishRecovery()
-                    VpnConnection.tunnelReady(id, provingRecovery)
-                    startStatistics(id, token, engine)
+                    if (reconnecting && !probing) recovery.finishRecovery()
+                    VpnConnection.tunnelReady(id, probing)
+                    startStatistics(id, token, engine, probing)
                 }
             }
         } catch (_: TooManyVpnRoutesException) {
@@ -207,17 +215,21 @@ class AwgVpnService : VpnService() {
         main.post { if (current(token)) VpnConnection.progress(id, message) }
     }
 
-    private fun startStatistics(id: Long, token: Long, engine: GoBackend) {
+    private fun startStatistics(id: Long, token: Long, engine: GoBackend, probing: Boolean) {
         if (!current(token)) return
+        var firstRead = true
         polling = VpnStatisticsPolling(main, needsFastStatistics()) { completed ->
+            val startup = options?.startup.takeIf { firstRead }
+            firstRead = false
             backendWorker.execute {
                 try {
+                    if (current(token)) startup?.mark(VpnStartStage.FIRST_SAMPLE)
                     pollTunnel(id, token, engine)
                 } finally {
                     main.post { completed() }
                 }
             }
-        }.also { it.start() }
+        }.also { it.start(probingHandshake = probing) }
     }
 
     private fun needsFastStatistics(): Boolean =
@@ -251,6 +263,7 @@ class AwgVpnService : VpnService() {
                 if (!current(token)) return@post
                 traffic = if (rx >= 0L && tx >= 0L) VpnTraffic(rx, tx) else null
                 if (connectedAt == 0L && handshake > 0L && recovery.handshakeReceived()) {
+                    polling?.handshakeObserved()
                     connectedAt = handshake.coerceAtMost(System.currentTimeMillis())
                     VpnConnection.handshake(id)
                 } else {
@@ -279,21 +292,13 @@ class AwgVpnService : VpnService() {
     private fun renderNotification() {
         val id = attempt
         if (closing || !VpnConnection.ownsAttempt(id)) return
-        val notice = when (VpnConnection.phase) {
-            VpnPhase.STARTING, VpnPhase.WAITING ->
-                VpnNotice(VpnNoticeStatus.CONNECTING, country, getString(VpnConnection.message))
-            VpnPhase.HANDSHAKE ->
-                VpnNotice(VpnNoticeStatus.CONNECTED, country, connectedAt = connectedAt, traffic = traffic)
-            VpnPhase.RECOVERING ->
-                VpnNotice(VpnNoticeStatus.RECONNECTING, country, getString(VpnConnection.message))
-            VpnPhase.STOPPING -> {
-                val error = VpnConnection.currentError ?: return
-                if (postedError) return
-                postedError = true
-                queueNotice(VpnNotice(VpnNoticeStatus.ERROR, country, error.display(this)), id)
-                return
-            }
-            VpnPhase.IDLE -> return
+        if (VpnConnection.phase == VpnPhase.IDLE) return
+        val state = VpnConnection.noticeStatus
+        val notice = if (state == VpnNoticeStatus.CONNECTED) {
+            VpnNotice(state, country, connectedAt = connectedAt, traffic = traffic, profileName = profileName)
+        } else {
+            val detail = VpnConnection.currentError?.display(this) ?: getString(VpnConnection.message)
+            VpnNotice(state, country, detail, profileName = profileName)
         }
         val revision = VpnConnection.notificationRevision
         if (!foreground || notificationDismissed || (lastNotice == notice && lastNoticeRevision == revision)) return
@@ -304,7 +309,7 @@ class AwgVpnService : VpnService() {
 
     private fun queueNotice(notice: VpnNotice, id: Long) {
         serviceCalls.execute {
-            if (notice.status != VpnNoticeStatus.ERROR && (closing || notificationDismissed)) return@execute
+            if (destroyed || notificationDismissed || (closing && notice.status != VpnNoticeStatus.STOPPING)) return@execute
             try {
                 notifications.update(notice, id)
             } catch (_: RuntimeException) {

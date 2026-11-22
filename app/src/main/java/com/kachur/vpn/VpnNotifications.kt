@@ -4,8 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
 import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.text.format.DateFormat
@@ -13,11 +13,22 @@ import android.text.format.Formatter
 import java.util.Date
 
 internal enum class VpnNoticeStatus(val label: Int) {
-    CONNECTING(R.string.vpn_notice_connecting),
-    CONNECTED(R.string.vpn_notice_connected),
+    OFF(R.string.vpn_control_off),
+    CONNECTING(R.string.vpn_control_connecting),
+    CONNECTED(R.string.vpn_control_connected),
     RECONNECTING(R.string.vpn_notice_reconnecting),
+    STOPPING(R.string.vpn_phase_stopping),
     ERROR(R.string.vpn_notice_error),
 }
+
+internal val VpnConnection.noticeStatus: VpnNoticeStatus
+    get() = when (phase) {
+        VpnPhase.IDLE -> if (preparing) VpnNoticeStatus.CONNECTING else VpnNoticeStatus.OFF
+        VpnPhase.STARTING, VpnPhase.WAITING -> VpnNoticeStatus.CONNECTING
+        VpnPhase.HANDSHAKE -> VpnNoticeStatus.CONNECTED
+        VpnPhase.RECOVERING -> VpnNoticeStatus.RECONNECTING
+        VpnPhase.STOPPING -> VpnNoticeStatus.STOPPING
+    }
 
 internal data class VpnTraffic(val received: Long, val sent: Long)
 
@@ -27,76 +38,117 @@ internal data class VpnNotice(
     val detail: String? = null,
     val connectedAt: Long = 0L,
     val traffic: VpnTraffic? = null,
+    val profileName: String? = null,
 )
 
 internal class VpnNotifications(private val context: Context) {
     private val manager = checkNotNull(context.getSystemService(NotificationManager::class.java))
 
-    fun prepare() {
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL, context.getString(R.string.vpn_notification_channel), NotificationManager.IMPORTANCE_LOW)
-                .apply { setShowBadge(false) },
-        )
-        manager.cancel(ERROR_ID)
-    }
+    fun prepare() = createChannel(CHANNEL, R.string.vpn_notification_channel)
+
+    fun canShow(channel: String): Boolean = manager.areNotificationsEnabled() &&
+        manager.getNotificationChannel(channel)?.importance != NotificationManager.IMPORTANCE_NONE
 
     fun build(notice: VpnNotice, attempt: Long): Notification {
         val ongoing = notice.status != VpnNoticeStatus.ERROR
-        val summary = context.getString(R.string.vpn_notice_summary, context.getString(notice.status.label), notice.country)
-        val traffic = notice.traffic?.let {
+        val server = notice.profileName?.let { context.getString(R.string.vpn_notice_summary, it, notice.country) }
+            ?: notice.country
+        val traffic = notice.traffic?.takeIf { notice.status == VpnNoticeStatus.CONNECTED }?.let {
             context.getString(R.string.vpn_notice_traffic,
                 Formatter.formatShortFileSize(context, it.received), Formatter.formatShortFileSize(context, it.sent))
         }
-        val started = notice.connectedAt.takeIf { it > 0L }?.let {
+        val connectedAt = notice.connectedAt.takeIf { notice.status == VpnNoticeStatus.CONNECTED } ?: 0L
+        val started = connectedAt.takeIf { it > 0L }?.let {
             context.getString(R.string.vpn_notice_connected_at, DateFormat.getTimeFormat(context).format(Date(it)))
         }
-        val open = PendingIntent.getActivity(
-            context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
-        val builder = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_vpn_status)
-            .setContentTitle(context.getString(R.string.app_name))
-            .setContentText(summary)
-            .setStyle(Notification.BigTextStyle().bigText(listOfNotNull(summary, notice.detail, started, traffic).joinToString("\n")))
-            .setContentIntent(open)
+        val builder = builder(CHANNEL, notice.status)
+            .setContentText(server)
+            .setStyle(Notification.BigTextStyle().bigText(listOfNotNull(server, notice.detail, started, traffic).joinToString("\n")))
             .setCategory(if (ongoing) Notification.CATEGORY_SERVICE else Notification.CATEGORY_ERROR)
-            .setOnlyAlertOnce(true)
-            .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setOngoing(ongoing)
-            .setShowWhen(notice.connectedAt > 0L)
-        if (notice.connectedAt > 0L) builder.setWhen(notice.connectedAt).setUsesChronometer(true)
+            .setShowWhen(connectedAt > 0L)
+        if (connectedAt > 0L) builder.setWhen(connectedAt).setUsesChronometer(true)
         if (ongoing) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             }
-            builder.setDeleteIntent(serviceAction(ACTION_DISMISS, attempt))
-            builder.addAction(Notification.Action.Builder(null, context.getString(R.string.vpn_disconnect),
-                PendingIntent.getBroadcast(context, attempt.toInt(), Intent(context, VpnNotificationReceiver::class.java)
-                    .setAction(ACTION_STOP).putExtra(VpnConnection.EXTRA_ATTEMPT, attempt), PendingIntent.FLAG_IMMUTABLE)).build())
+            builder.setDeleteIntent(dismissAction(attempt))
+            if (notice.status != VpnNoticeStatus.STOPPING) {
+                val stop = PendingIntent.getBroadcast(
+                    context, attempt.toInt(), Intent(context, VpnNotificationReceiver::class.java)
+                        .setAction(ACTION_STOP).putExtra(VpnConnection.EXTRA_ATTEMPT, attempt),
+                    PendingIntent.FLAG_IMMUTABLE,
+                )
+                builder.addAction(action(R.string.vpn_disconnect, stop))
+            }
         } else {
-            builder.setAutoCancel(true).setTimeoutAfter(60_000L)
+            builder.setAutoCancel(true).setTimeoutAfter(ERROR_TIMEOUT_MS)
         }
         return builder.build()
     }
 
-    fun update(notice: VpnNotice, attempt: Long) {
-        val id = if (notice.status == VpnNoticeStatus.ERROR) ERROR_ID else FOREGROUND_ID
-        manager.notify(id, build(notice, attempt))
+    fun update(notice: VpnNotice, attempt: Long) = manager.notify(FOREGROUND_ID, build(notice, attempt))
+
+    fun buildControl(status: VpnNoticeStatus, detail: String? = null): Notification =
+        builder(if (status == VpnNoticeStatus.ERROR) CHANNEL else CONTROL_CHANNEL, status)
+            .setCategory(if (status == VpnNoticeStatus.ERROR) Notification.CATEGORY_ERROR else Notification.CATEGORY_STATUS)
+            .setShowWhen(false)
+            .apply {
+                if (detail != null) {
+                    setContentText(detail)
+                    setStyle(Notification.BigTextStyle().bigText(detail))
+                }
+                if (status == VpnNoticeStatus.OFF) addAction(action(R.string.vpn_control_enable, VpnQuickActivity.pendingIntent(context)))
+                if (status == VpnNoticeStatus.ERROR) setAutoCancel(true).setTimeoutAfter(ERROR_TIMEOUT_MS)
+            }
+            .build()
+
+    fun updateControl(status: VpnNoticeStatus, detail: String?) {
+        if (status == VpnNoticeStatus.ERROR) prepare()
+        else createChannel(CONTROL_CHANNEL, R.string.vpn_control_channel)
+        manager.notify(CONTROL_ID, buildControl(status, detail))
     }
 
-    private fun serviceAction(action: String, attempt: Long): PendingIntent = PendingIntent.getService(
-        context, attempt.toInt(), Intent(context, AwgVpnService::class.java).setAction(action)
+    fun clearControl() = manager.cancel(CONTROL_ID)
+
+    private fun createChannel(id: String, name: Int) = manager.createNotificationChannel(
+        NotificationChannel(id, context.getString(name), NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) },
+    )
+
+    private fun builder(channel: String, status: VpnNoticeStatus): Notification.Builder {
+        val open = PendingIntent.getActivity(
+            context, 0, Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(context, channel)
+            .setSmallIcon(R.drawable.ic_vpn_status)
+            .setContentTitle(context.getString(R.string.vpn_control_title, context.getString(R.string.app_name),
+                context.getString(status.label)))
+            .setContentIntent(open)
+            .setOnlyAlertOnce(true)
+            .setVisibility(Notification.VISIBILITY_PRIVATE)
+    }
+
+    private fun action(label: Int, intent: PendingIntent): Notification.Action =
+        Notification.Action.Builder(null, context.getString(label), intent).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setAuthenticationRequired(true)
+        }.build()
+
+    private fun dismissAction(attempt: Long): PendingIntent = PendingIntent.getService(
+        context, attempt.toInt(), Intent(context, AwgVpnService::class.java).setAction(ACTION_DISMISS)
             .putExtra(VpnConnection.EXTRA_ATTEMPT, attempt),
         PendingIntent.FLAG_IMMUTABLE,
     )
 
     companion object {
         const val CHANNEL = "amneziawg_vpn"
+        const val CONTROL_CHANNEL = "vpn_idle_controls"
         const val FOREGROUND_ID = 1
+        const val CONTROL_ID = 2
         const val ACTION_STOP = "com.kachur.vpn.STOP_VPN"
         const val ACTION_DISMISS = "com.kachur.vpn.DISMISS_VPN_NOTICE"
-        private const val ERROR_ID = 2
+        private const val ERROR_TIMEOUT_MS = 60_000L
     }
 }
 

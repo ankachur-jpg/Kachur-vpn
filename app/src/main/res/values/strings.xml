@@ -122,7 +122,6 @@
     <string name="vpn_handshake_received">Туннель активен. Получено подтверждение обмена ключами.</string>
     <string name="vpn_stopping">Отключение VPN…</string>
     <string name="vpn_notification_channel">Состояние VPN</string>
-    <string name="vpn_notice_connecting">Подключение</string>
     <string name="vpn_notice_connected">Подключено</string>
     <string name="vpn_notice_reconnecting">Переподключение</string>
     <string name="vpn_notice_error">Ошибка VPN</string>

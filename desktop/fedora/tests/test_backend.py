@@ -36,8 +36,11 @@ class BackendTests(unittest.TestCase):
     def test_does_not_start_without_user_click(self, run, tool):
         run.return_value = Mock(returncode=0)
         switch_tunnel("amn0", True)
-        self.assertEqual(run.call_args.args[0],
-            ["/usr/bin/pkexec", "/usr/bin/awg-quick", "up", "amn0"])
+        self.assertEqual(run.call_args.args[0], [
+            "/usr/bin/pkexec", "/usr/bin/env",
+            "WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/bin/amneziawg-go",
+            "/usr/bin/awg-quick", "up", "amn0"
+        ])
 
     def test_shell_injection_blocked(self):
         with self.assertRaises(VPNError):

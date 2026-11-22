@@ -231,6 +231,8 @@ class ConfigImportActivityTest {
                 assertEquals(VpnPhase.IDLE, VpnConnection.phase)
 
                 controller.resume().postResume()
+                // Wait for this attempt before checking the retained service-launch diagnostic.
+                awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_requesting_service))
                 awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
                 assertEquals(VpnPhase.STARTING, VpnConnection.phase)
                 assertTrue(connect.contentDescription.contains(activity.getString(R.string.vpn_cancel_start)))

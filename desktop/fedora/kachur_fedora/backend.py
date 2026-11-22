@@ -2,8 +2,8 @@
 
 No privileged command is run at import/startup. The user must explicitly press
 Connect/Disconnect, at which point polkit authenticates awg-quick. Handshake
-inspection is a separate, explicit read-only action; periodic refreshes never
-request administrator privileges. No shell=True is used.
+inspection and profile import are separate, explicit Polkit actions. Periodic
+refreshes never request administrator privileges. No shell=True is used.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 
 _VALID_IFACE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,14}$")
+_IMPORT_HELPER = Path("/usr/local/libexec/kachur-vpn-helper")
 
 
 class VPNError(RuntimeError):
@@ -126,6 +127,26 @@ def read_state(name: str, check_handshake: bool = False) -> VPNState:
     return VPNState(True, counter("rx_bytes"), counter("tx_bytes"), handshake)
 
 
+def import_profile(source_path: str) -> None:
+    """Import a validated .conf through a fixed, root-owned Polkit helper."""
+    if not _IMPORT_HELPER.is_file() or not _IMPORT_HELPER.stat().st_mode & 0o111:
+        raise VPNError(
+            "Помощник безопасного импорта не установлен. Сначала выполните команду "
+            "установки из инструкции Kachur VPN."
+        )
+    pkexec = _tool("pkexec")
+    result = _run(
+        [pkexec, str(_IMPORT_HELPER), "import-profile", str(Path(source_path).absolute())],
+        timeout=45,
+    )
+    if result.returncode:
+        # Never show helper output: a malformed profile may contain secret values.
+        raise VPNError(
+            "Импорт не выполнен. Проверьте формат AmneziaWG .conf; опасные директивы "
+            "и команды в конфигурации запрещены."
+        )
+
+
 def switch_tunnel(name: str, connect: bool) -> None:
     """Require explicit polkit authorization; never execute arbitrary paths."""
     name = check_interface(name)
@@ -145,7 +166,6 @@ def switch_tunnel(name: str, connect: bool) -> None:
         timeout=90,
     )
     if result.returncode:
-        # Deliberately don't reveal awg-quick stderr (may include config details).
         raise VPNError(
             "Не удалось изменить состояние VPN. Проверьте системные разрешения "
             "и профиль /etc/amnezia/amneziawg/kch0.conf."

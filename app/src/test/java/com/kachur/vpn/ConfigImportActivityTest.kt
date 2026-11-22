@@ -178,7 +178,7 @@ class ConfigImportActivityTest {
             try {
                 VpnConnection.publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
                 assertEquals(activity.getString(R.string.vpn_waiting_handshake), text(activity, R.id.connection_status))
-                assertEquals(activity.getString(R.string.vpn_disconnect), connect.text.toString())
+                assertTrue(connect.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
                 assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
 
                 controller.recreate()
@@ -231,16 +231,18 @@ class ConfigImportActivityTest {
                 assertEquals(VpnPhase.IDLE, VpnConnection.phase)
 
                 controller.resume().postResume()
+                // Wait for this attempt before checking the retained service-launch diagnostic.
+                awaitViewText(activity, R.id.connection_status, activity.getString(R.string.vpn_requesting_service))
                 awaitDiagnostic(activity, R.string.vpn_service_launch_accepted)
                 assertEquals(VpnPhase.STARTING, VpnConnection.phase)
-                assertEquals(activity.getString(R.string.vpn_cancel_start), connect.text.toString())
+                assertTrue(connect.contentDescription.contains(activity.getString(R.string.vpn_cancel_start)))
                 assertTrue(connect.isEnabled)
                 assertTrue(text(activity, R.id.connection_diagnostics).contains("permissionPending · false"))
                 awaitDiagnostic(activity, R.string.vpn_service_awaiting_reply)
 
                 shadowOf(Looper.getMainLooper()).idleFor(VpnConnection.STARTUP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 assertEquals(activity.getString(R.string.vpn_service_timeout), text(activity, R.id.connection_status))
-                assertEquals(activity.getString(R.string.connect_vpn), connect.text.toString())
+                assertTrue(connect.contentDescription.contains(activity.getString(R.string.connect_vpn)))
                 assertTrue(connect.isEnabled)
                 awaitDiagnostic(activity, R.string.vpn_service_no_reply)
                 resetButton(activity).performClick()
@@ -642,7 +644,7 @@ class ConfigImportActivityTest {
                 assertEquals(VpnPhase.RECOVERING, VpnConnection.phase)
                 val button = activity.findViewById<Button>(R.id.connect_vpn_button)
                 assertTrue(button.isEnabled)
-                assertEquals(activity.getString(R.string.vpn_disconnect), button.text.toString())
+                assertTrue(button.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
                 button.performClick()
                 assertEquals(1, stopped)
                 assertFalse(recovery.recovering)
@@ -665,13 +667,17 @@ class ConfigImportActivityTest {
     fun automaticRecoverySwitchDefaultsToOnAndPersistsSeparatelyFromLaunchSetting() {
         val context = RuntimeEnvironment.getApplication()
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
-            val toggle = controller.get().findViewById<Switch>(R.id.vpn_auto_recovery)
+            val activity = controller.get()
+            activity.findViewById<View>(R.id.ui_open_settings).performClick()
+            val toggle = activity.findViewById<Switch>(R.id.vpn_auto_recovery)
             assertTrue(toggle.isChecked)
             toggle.performClick()
             assertFalse(VpnLaunchSettings(context).recoveryEnabled)
         }
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
-            assertFalse(controller.get().findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
+            val activity = controller.get()
+            activity.findViewById<View>(R.id.ui_open_settings).performClick()
+            assertFalse(activity.findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
             assertTrue(VpnLaunchSettings(context).enabled)
         }
     }

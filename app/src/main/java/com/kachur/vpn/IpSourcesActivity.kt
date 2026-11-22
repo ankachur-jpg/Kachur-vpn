@@ -1,25 +1,21 @@
 package com.kachur.vpn
 
-import android.app.Activity
 import android.app.AlertDialog
 import android.content.SharedPreferences
-import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.text.DateFormat
 import java.util.Date
 
-class IpSourcesActivity : Activity() {
+class IpSourcesActivity : KachurActivity() {
     private val settings by lazy { IpUpdateSettings(applicationContext) }
     private val preferencesListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         if (key == "ip_update_attempt" || key == "ip_update_result") renderStatus()
@@ -35,68 +31,48 @@ class IpSourcesActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(6), dp(16), dp(16))
-            setBackgroundColor(Color.rgb(18, 24, 35))
-        }
-        content.addView(Button(this).apply {
-            setText(R.string.split_back)
-            setOnClickListener { finish() }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-        content.addView(TextView(this).apply {
-            setText(R.string.ip_update_title)
-            textSize = 24f
-        })
-        registry = CheckBox(this).apply {
-            id = R.id.ip_update_registry
-            setText(R.string.ip_update_registry)
-            setOnCheckedChangeListener { _, checked ->
-                if (!rendering) with(settings.configuration()) { save(checked, custom, schedule) }
+        val content = uiColumn(18)
+        content.uiAdd(uiHeader(R.string.ip_update_title) { finish() })
+        content.uiAdd(uiCard().apply {
+            registry = CheckBox(this@IpSourcesActivity).apply {
+                id = R.id.ip_update_registry
+                minHeight = dp(48)
+                setText(R.string.ip_update_registry)
+                setOnCheckedChangeListener { _, checked ->
+                    if (!rendering) with(settings.configuration()) { save(checked, custom, schedule) }
+                }
             }
-        }
-        content.addView(registry)
-        content.addView(TextView(this).apply { setText(R.string.ip_update_registry_description) })
-        frequency = Button(this).apply {
-            id = R.id.ip_update_schedule
-            setOnClickListener { chooseSchedule() }
-        }
-        content.addView(frequency)
-        sourceRows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(sourceRows)
-        add = Button(this).apply {
-            id = R.id.ip_update_add
-            setText(R.string.ip_update_add)
-            setOnClickListener { addSource() }
-        }
-        content.addView(add)
-        update = Button(this).apply {
-            id = R.id.ip_update_now
-            setText(R.string.ip_update_now)
-            setOnClickListener {
-                status.setText(if (IpUpdateJobs.updateNow(applicationContext)) R.string.ip_update_queued else R.string.ip_update_schedule_failed)
+            uiAdd(registry)
+            uiAdd(uiCaption(R.string.ip_update_registry_description), 6)
+            frequency = uiButton(0).apply {
+                id = R.id.ip_update_schedule
+                setOnClickListener { chooseSchedule() }
             }
-        }
-        content.addView(update)
-        status = TextView(this).apply {
-            id = R.id.ip_update_status
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        content.addView(status)
-        content.addView(TextView(this).apply {
-            setPadding(0, dp(12), 0, 0)
-            setText(R.string.ip_update_apply_note)
-        })
-
-        setContentView(ScrollView(this).apply {
-            addView(content)
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
-                insets
+            uiAdd(frequency, 10)
+        }, 16)
+        sourceRows = uiColumn()
+        content.uiAdd(sourceRows)
+        content.uiAdd(uiCard().apply {
+            add = uiButton(R.string.ip_update_add).apply {
+                id = R.id.ip_update_add
+                setOnClickListener { addSource() }
             }
-        })
+            update = uiButton(R.string.ip_update_now, primary = true).apply {
+                id = R.id.ip_update_now
+                setOnClickListener {
+                    status.setText(if (IpUpdateJobs.updateNow(applicationContext)) R.string.ip_update_queued else R.string.ip_update_schedule_failed)
+                }
+            }
+            uiAdd(add)
+            uiAdd(update, 8)
+            status = uiLabel(15).apply {
+                id = R.id.ip_update_status
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            uiAdd(status, 10)
+            uiAdd(uiCaption(R.string.ip_update_apply_note), 8)
+        }, 14)
+        setContentView(uiScroll(content).apply { uiInsets() })
     }
 
     override fun onStart() {
@@ -123,6 +99,7 @@ class IpSourcesActivity : Activity() {
 
     private fun addSource() {
         val input = EditText(this).apply {
+            uiField()
             setSingleLine(true)
             setHint(R.string.ip_update_url_hint)
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
@@ -166,23 +143,19 @@ class IpSourcesActivity : Activity() {
         val config = settings.configuration()
         sourceRows.removeAllViews()
         for (source in config.sources) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val row = uiCard(12)
             val time = settings.timeFor(source)
             val description = if (time == 0L) getString(R.string.ip_update_source_pending, source.title(this)) else
                 getString(R.string.ip_update_source_status, source.title(this), timeFormat.format(Date(time)), settings.routesFor(source).size)
-            row.addView(TextView(this).apply {
-                text = description
-                setPadding(0, dp(6), 0, dp(6))
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            if (source.url != null) row.addView(Button(this).apply {
-                setText(R.string.ip_remove)
+            row.uiAdd(uiLabel().apply { text = description })
+            if (source.url != null) row.uiAdd(uiButton(R.string.ip_remove).apply {
                 contentDescription = getString(R.string.ip_update_remove_source, source.title(this@IpSourcesActivity))
                 setOnClickListener {
                     val current = settings.configuration()
                     save(current.useRegistry, current.custom - source, current.schedule)
                 }
-            })
-            sourceRows.addView(row)
+            }, 8)
+            sourceRows.uiAdd(row, 12)
         }
         val result = settings.lastResult()
         if (config.sources.isEmpty()) {
@@ -197,8 +170,6 @@ class IpSourcesActivity : Activity() {
             status.text = report.joinToString(" · ")
         }
     }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
         const val MAX_CUSTOM = 8

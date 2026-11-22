@@ -68,17 +68,18 @@ class SplitTunnelingActivityTest {
 
     private fun searchForGovernmentApp(screen: SplitTunnelingActivity): Switch {
         val list = screen.findViewById<ListView>(R.id.split_apps)
-        screen.findViewById<EditText>(R.id.split_search).setText("ГОСУСЛ")
+        list.adapter.getView(0, null, list).findViewById<EditText>(R.id.split_search).setText("ГОСУСЛ")
+        val firstResult = list.headerViewsCount
         val looper = shadowOf(Looper.getMainLooper())
         val deadline = System.nanoTime() + 5_000_000_000L
         do {
             looper.idle()
-            if (list.adapter.count == 1) break
+            if (list.adapter.count == firstResult + 1) break
             Thread.sleep(10)
         } while (System.nanoTime() < deadline)
-        assertEquals(1, list.adapter.count)
-        assertEquals("ru.rostel", (list.adapter.getItem(0) as InstalledApp).packageName)
-        return list.adapter.getView(0, null, list).findViewById(R.id.split_app_switch)
+        assertEquals(firstResult + 1, list.adapter.count)
+        assertEquals("ru.rostel", (list.adapter.getItem(firstResult) as InstalledApp).packageName)
+        return list.adapter.getView(firstResult, null, list).findViewById(R.id.split_app_switch)
     }
 
     private fun installLauncherApp(packageName: String, label: String) {

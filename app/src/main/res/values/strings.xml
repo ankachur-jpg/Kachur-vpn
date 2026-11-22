@@ -77,7 +77,7 @@
     <string name="diag_icmp_stats">Ping ICMP %1$s · Jitter %2$s\nПотери %3$d%% · ответов %4$d из %5$d</string>
     <string name="diag_tcp_stats">Подключение TCP 443 %1$s · Jitter TCP %2$s\nНеудачных подключений %3$d%% · успешно %4$d из %5$d</string>
     <string name="diag_millis">%1$.1f мс</string>
-    <string name="diag_history">История Ping ICMP для 1.1.1.1\nСиний — напрямую, фиолетовый — через VPN</string>
+    <string name="diag_history">История ICMP Ping · 1.1.1.1</string>
     <string name="diag_history_empty">Нет измерений задержки ICMP</string>
     <string name="import_profile">Импортировать .conf</string>
     <string name="connect_vpn">Подключить VPN</string>

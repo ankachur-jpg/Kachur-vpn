@@ -4,35 +4,29 @@ import android.app.Activity
 import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
-import android.graphics.Color
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
-import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.EditText
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.TextView
-import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import java.io.IOException
 import java.util.concurrent.Executors
 
-class IpRoutesActivity : ComponentActivity() {
+class IpRoutesActivity : KachurActivity() {
     private val settings by lazy { SplitTunnelingSettings(applicationContext) }
     private val session by lazy { ViewModelProvider(this)[IpImportSession::class.java] }
     private val vpnObserver: () -> Unit = ::renderVpn
@@ -65,67 +59,39 @@ class IpRoutesActivity : ComponentActivity() {
         if (savedInstanceState?.getBoolean(IMPORTING) == true && !session.loading && session.feedback == null) {
             session.show(R.string.ip_import_interrupted)
         }
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            isFocusableInTouchMode = true
-            setBackgroundColor(Color.rgb(18, 24, 35))
-            setOnApplyWindowInsetsListener { view, insets ->
-                @Suppress("DEPRECATION")
-                val bottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime()).bottom
-                } else {
-                    insets.systemWindowInsetBottom
+        val header = uiColumn(18)
+        header.uiAdd(uiHeader(R.string.ip_title) { finish() })
+        header.uiAdd(uiCaption(R.string.ip_description), 12)
+        header.uiAdd(uiCard().apply {
+            val sources = uiSettingsLink(R.string.ip_update_title, R.drawable.ic_ui_routes).apply {
+                id = R.id.ip_open_sources
+                setOnClickListener { startActivity(Intent(this@IpRoutesActivity, IpSourcesActivity::class.java)) }
+            }
+            importButton = uiButton(R.string.ip_import, primary = true, icon = R.drawable.ic_ui_import).apply {
+                id = R.id.ip_import_button
+                setOnClickListener { openFilePicker() }
+            }
+            uiAdd(sources)
+            uiAdd(importButton, 8)
+            feedback = uiLabel(15).apply {
+                id = R.id.ip_import_feedback
+                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            }
+            uiAdd(feedback, 8)
+            reconnect = uiButton(R.string.split_apply_reconnect).apply {
+                id = R.id.ip_reconnect_button
+                setOnClickListener {
+                    applyingRoutes = true
+                    VpnConnection.reconnectWithSavedExclusions(applicationContext)
+                    renderVpn()
                 }
-                @Suppress("DEPRECATION")
-                view.setPadding(insets.systemWindowInsetLeft + dp(16), insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight + dp(16), bottom)
-                insets
             }
-        }
-        root.addView(LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(Button(context).apply {
-                setText(R.string.split_back)
-                setOnClickListener { finish() }
-            })
-            addView(TextView(context).apply {
-                setText(R.string.ip_title)
-                setTextColor(Color.WHITE)
-                textSize = 22f
-                setPadding(dp(12), 0, 0, 0)
-            })
-        })
-        root.addView(TextView(this).apply { setText(R.string.ip_description) })
-        root.addView(Button(this).apply {
-            id = R.id.ip_open_sources
-            setText(R.string.ip_update_title)
-            setOnClickListener { startActivity(Intent(this@IpRoutesActivity, IpSourcesActivity::class.java)) }
-        })
-        importButton = Button(this).apply {
-            id = R.id.ip_import_button
-            setText(R.string.ip_import)
-            setOnClickListener { openFilePicker() }
-        }
-        root.addView(importButton)
-        feedback = TextView(this).apply {
-            id = R.id.ip_import_feedback
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-        }
-        root.addView(feedback)
-        reconnect = Button(this).apply {
-            id = R.id.ip_reconnect_button
-            setText(R.string.split_apply_reconnect)
-            setOnClickListener {
-                applyingRoutes = true
-                VpnConnection.reconnectWithSavedExclusions(applicationContext)
-                renderVpn()
-            }
-        }
-        root.addView(reconnect)
-        vpnStatus = TextView(this).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
-        root.addView(vpnStatus)
+            uiAdd(reconnect, 8)
+            vpnStatus = uiLabel(15).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE }
+            uiAdd(vpnStatus, 6)
+        }, 14)
         search = routeField(R.id.ip_search, R.string.ip_search_hint, EditorInfo.IME_ACTION_SEARCH)
-        root.addView(search)
+        header.uiAdd(search, 14)
         input = routeField(R.id.ip_input, R.string.ip_add_hint, EditorInfo.IME_ACTION_DONE)
         input.setOnEditorActionListener { _, actionId, _ ->
             if (actionId != EditorInfo.IME_ACTION_DONE) false else {
@@ -133,25 +99,26 @@ class IpRoutesActivity : ComponentActivity() {
                 true
             }
         }
-        root.addView(LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(input, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(Button(context).apply {
-                id = R.id.ip_add_button
-                setText(R.string.ip_add)
-                setOnClickListener { addRoute() }
-            })
-        })
-        empty = TextView(this).apply { gravity = Gravity.CENTER }
+        val add = uiButton(R.string.ip_add).apply {
+            id = R.id.ip_add_button
+            setOnClickListener { addRoute() }
+        }
+        header.uiAdd(uiPair(input, add), 8)
+        empty = uiLabel(15, R.color.ui_muted)
+        header.uiAdd(empty, 10)
         val list = ListView(this).apply {
             id = R.id.ip_list
+            itemsCanFocus = true
+            addHeaderView(header, null, false)
+            divider = android.graphics.drawable.ColorDrawable(getColor(R.color.ui_background))
+            dividerHeight = dp(8)
             adapter = routes
         }
-        root.addView(FrameLayout(this).apply {
-            addView(list)
-            addView(empty)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        list.emptyView = empty
+        val root = uiColumn().apply {
+            isFocusableInTouchMode = true
+            uiInsets()
+            addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
         search.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = showMatches()
@@ -186,6 +153,7 @@ class IpRoutesActivity : ComponentActivity() {
     private fun routeField(viewId: Int, hint: Int, action: Int) = EditText(this).apply {
         id = viewId
         setHint(hint)
+        uiField()
         setSingleLine(true)
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         imeOptions = action or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
@@ -237,6 +205,7 @@ class IpRoutesActivity : ComponentActivity() {
         val exact = IpRoutePrefix.parse(query)?.toString()
         routes.items = savedRoutes.filter { it.contains(query, ignoreCase = true) || it == exact }
         empty.setText(if (savedRoutes.isEmpty()) R.string.ip_no_routes else R.string.ip_no_matches)
+        empty.visibility = if (routes.items.isEmpty()) View.VISIBLE else View.GONE
         routes.notifyDataSetChanged()
     }
 
@@ -275,20 +244,17 @@ class IpRoutesActivity : ComponentActivity() {
     }
 
     private inner class RouteRow : LinearLayout(this@IpRoutesActivity) {
-        val label = TextView(context).apply { textSize = 16f }
-        val remove = Button(context).apply {
+        val label = context.uiLabel(16, bold = true)
+        val remove = context.uiButton(R.string.ip_remove).apply {
             id = R.id.ip_remove_button
-            setText(R.string.ip_remove)
         }
 
         init {
-            gravity = Gravity.CENTER_VERTICAL
-            addView(label, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(remove)
+            orientation = VERTICAL
+            setPadding(dp(18), 0, dp(18), 0)
+            uiAdd(context.uiCard(12).apply { uiAdd(context.uiPair(label, remove)) })
         }
     }
-
-    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private companion object {
         const val IMPORTING = "importing_ip_json"

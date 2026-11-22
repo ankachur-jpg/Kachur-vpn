@@ -256,6 +256,7 @@ class AwgVpnService : VpnService() {
                 } else {
                     renderNotification()
                 }
+                VpnTrafficUi.publish(id, traffic, connectedAt)
             }
         } catch (_: RuntimeException) {
             fail(id, token, R.string.vpn_handshake_read_error)
@@ -342,6 +343,7 @@ class AwgVpnService : VpnService() {
     private fun releaseForRecovery() {
         connectedAt = 0L
         traffic = null
+        VpnTrafficUi.clear(attempt)
         invalidateTunnel()
         // Leave ordinary Android routing in place while waiting for a usable network.
         backendWorker.execute {
@@ -364,6 +366,7 @@ class AwgVpnService : VpnService() {
         if (closing) return
         closing = true
         options = null
+        VpnTrafficUi.clear(attempt)
         recovery.cancel()
         if (attempt != 0L) preferences.unregisterOnSharedPreferenceChangeListener(recoveryObserver)
         monitor?.close()

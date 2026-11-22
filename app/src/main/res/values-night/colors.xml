@@ -1,0 +1,24 @@
+<resources>
+    <color name="ui_background">#10142D</color>
+    <color name="ui_surface">#191F3E</color>
+    <color name="ui_surface_high">#222A50</color>
+    <color name="ui_border">#363F68</color>
+    <color name="ui_text">#F5F6FF</color>
+    <color name="ui_muted">#BAC3E4</color>
+    <color name="ui_accent">#C2CAFF</color>
+    <color name="ui_accent_soft">#272E55</color>
+    <color name="ui_primary_start">#554CCD</color>
+    <color name="ui_primary_end">#35368C</color>
+    <color name="ui_on_primary">#FFFFFF</color>
+    <color name="ui_map_center">#425EC3</color>
+    <color name="ui_map_mid">#263C85</color>
+    <color name="ui_map_edge">#121934</color>
+    <color name="ui_horizon">#4698FF</color>
+    <color name="ui_good">#7DF1AA</color>
+    <color name="ui_good_surface">#15372E</color>
+    <color name="ui_error">#FFB5C7</color>
+    <color name="ui_error_surface">#4A2439</color>
+    <color name="ui_ripple">#32BBC5FF</color>
+    <color name="ui_chart_second">#66DAD9</color>
+    <bool name="ui_light_bars">false</bool>
+</resources>

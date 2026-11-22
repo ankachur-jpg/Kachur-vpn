@@ -140,5 +140,5 @@ def switch_tunnel(name: str, connect: bool) -> None:
         # Deliberately don't reveal awg-quick stderr (may include config details).
         raise VPNError(
             "Не удалось изменить состояние VPN. Проверьте системные разрешения "
-            "и профиль /etc/amneziawg/<имя>.conf."
+            "и профиль /etc/amnezia/amneziawg/kch0.conf."
         )

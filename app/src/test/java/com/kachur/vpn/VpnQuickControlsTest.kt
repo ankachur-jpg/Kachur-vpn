@@ -2,11 +2,16 @@ package com.kachur.vpn
 
 import android.Manifest
 import android.app.Activity
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationManager
+import android.content.ComponentName
+import android.content.ContextWrapper
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.service.quicksettings.Tile
 import android.widget.Button
 import android.widget.TextView
@@ -51,6 +56,79 @@ class VpnQuickControlsTest {
         }
         VpnConnection.reset()
         VpnConsentShadow.granted = false
+    }
+
+    @Test
+    fun warmTileStartsTheSameTunnelOnceWithoutAnActivityAndMeasuresHandshake() {
+        val selected = saveSelectedProfile()
+        VpnConsentShadow.granted = true
+        var windows = 0
+        val openWindow: (String) -> Boolean = { windows++; false }
+        VpnTileStart.start(app, SystemClock.elapsedRealtime(), openWindow)
+        VpnTileStart.start(app, SystemClock.elapsedRealtime(), openWindow)
+        await {
+            VpnConnection.phase == VpnPhase.STARTING &&
+                VpnConnection.serviceLaunch == R.string.vpn_service_launch_accepted
+        }
+        assertEquals(0, windows)
+        val launched = shadowOf(app).nextStartedService
+        assertEquals(AwgVpnService::class.java.name, launched.component?.className)
+        assertNull(shadowOf(app).nextStartedService)
+        val id = launched.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+        assertEquals(selected.documentKey, VpnConnection.claim(id) {}?.profileId)
+        VpnConnection.tunnelReady(id)
+        val trace = checkNotNull(VpnStartupTiming.last(VpnStartSource.TILE))
+        assertTrue(trace.snapshot().any { it.stage == VpnStartStage.PROFILE_CACHED })
+        assertTrue(trace.snapshot().any { it.stage == VpnStartStage.PERMISSION_CHECKED })
+        assertTrue(trace.snapshot().none { it.stage == VpnStartStage.WINDOW_REQUESTED || it.stage == VpnStartStage.HANDSHAKE_CONFIRMED })
+        VpnConnection.handshake(id)
+        assertEquals(VpnStartStage.HANDSHAKE_CONFIRMED, trace.snapshot().last().stage)
+        assertTrue(trace.snapshot().zipWithNext().all { (first, second) -> first.elapsedMs <= second.elapsedMs })
+    }
+
+    @Test
+    fun ungrantedTileHandsOffOnceToTheExistingConsentFlow() {
+        saveSelectedProfile()
+        var key: String? = null
+        VpnTileStart.start(app, SystemClock.elapsedRealtime()) {
+            key = it
+            true
+        }
+        await { key != null }
+        val windowKey = checkNotNull(key)
+        assertTrue(VpnConnection.preparing)
+        assertNull(shadowOf(app).nextStartedService)
+        Robolectric.buildActivity(VpnQuickActivity::class.java, VpnQuickActivity.tileIntent(app, windowKey))
+            .setup().use { quick ->
+                await { VpnConnection.awaitingConsent }
+                assertNull(VpnTileStart.takeWindow(windowKey))
+                val activity = quick.get()
+                val prompt = shadowOf(activity).nextStartedActivityForResult
+                assertTrue(activity.activityResultRegistry.dispatchResult(prompt.requestCode, Activity.RESULT_CANCELED, null))
+                await { !VpnConnection.preparing }
+                val stages = checkNotNull(VpnStartupTiming.last(VpnStartSource.TILE)).snapshot().map { it.stage }
+                assertTrue(stages.containsAll(listOf(VpnStartStage.WINDOW_REQUESTED, VpnStartStage.WINDOW_RESUMED,
+                    VpnStartStage.CONSENT_DIALOG, VpnStartStage.CONSENT_RESULT, VpnStartStage.ENDED)))
+                assertNull(shadowOf(app).nextStartedService)
+            }
+    }
+
+    @Test
+    fun platformBackgroundDenialLeavesTheTimingOpenForAWindowFallback() {
+        val selected = saveSelectedProfile()
+        val restricted = object : ContextWrapper(app) {
+            override fun startForegroundService(service: Intent): ComponentName? {
+                throw ForegroundServiceStartNotAllowedException("mock restriction")
+            }
+        }
+        val timing = VpnStartupTiming.begin(VpnStartSource.TILE)
+        var fallbacks = 0
+        assertTrue(VpnConnection.start(restricted, selected.config, startup = timing,
+            onBackgroundStartDenied = { fallbacks++ }))
+        await { fallbacks == 1 }
+        assertEquals(VpnPhase.IDLE, VpnConnection.phase)
+        assertEquals(VpnStartStage.SERVICE_RESTRICTED, timing.snapshot().last().stage)
+        assertNull(shadowOf(app).nextStartedService)
     }
 
     @Test

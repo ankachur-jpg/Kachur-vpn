@@ -19,7 +19,7 @@ import java.util.concurrent.Future
 internal class VpnConsent(
     private val activity: ComponentActivity,
     private val status: (message: Int, error: Boolean) -> Unit,
-    private val granted: (automatic: Boolean, profileId: String?) -> Unit,
+    private val granted: (automatic: Boolean, profileId: String?, startup: VpnStartupTrace?) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var request: Request? = null
@@ -33,6 +33,7 @@ internal class VpnConsent(
         val key: String,
         val automatic: Boolean,
         val profileId: String?,
+        val startup: VpnStartupTrace?,
     ) {
         val resetGeneration = VpnConnection.resetGeneration
         var dialogLaunched = false
@@ -44,9 +45,14 @@ internal class VpnConsent(
         val pending: Boolean get() = dialogLaunched && !resultReceived
     }
 
-    fun begin(automatic: Boolean, profileId: String? = null, key: String = UUID.randomUUID().toString()): Boolean {
+    fun begin(
+        automatic: Boolean,
+        profileId: String? = null,
+        key: String = UUID.randomUUID().toString(),
+        startup: VpnStartupTrace? = null,
+    ): Boolean {
         if (busy || !VpnConnection.reservePreparation(key)) return false
-        val next = Request(key, automatic, profileId)
+        val next = Request(key, automatic, profileId, startup)
         request = next
         armDeadline(next, CHECK_TIMEOUT_MS)
         checkPermission(next, allowDialog = true)
@@ -63,7 +69,8 @@ internal class VpnConsent(
             return
         }
         if (!VpnConnection.reservePreparation(key)) return
-        val restored = Request(key, state.getBoolean(AUTOMATIC), state.getString(PROFILE)).apply {
+        val restored = Request(key, state.getBoolean(AUTOMATIC), state.getString(PROFILE),
+            VpnStartupTiming.find(state.getString(STARTUP))).apply {
             dialogLaunched = true
             resultReceived = state.getBoolean(RESULT_RECEIVED)
         }
@@ -85,6 +92,7 @@ internal class VpnConsent(
             state.putLong(RESET_GENERATION, it.resetGeneration)
             state.putBoolean(AUTOMATIC, it.automatic)
             state.putString(PROFILE, it.profileId)
+            state.putString(STARTUP, it.startup?.id)
         }
     }
 
@@ -100,15 +108,22 @@ internal class VpnConsent(
 
     fun pause() { resumed = false }
 
-    fun cancel() { request?.let(::clear) }
+    fun cancel(preserveTrace: Boolean = false) {
+        request?.let {
+            if (!preserveTrace) it.startup?.mark(VpnStartStage.ENDED)
+            clear(it)
+        }
+    }
 
     fun cancelIfInvalid(): Boolean {
         val invalid = request?.takeUnless(::isCurrent) ?: return false
+        invalid.startup?.mark(VpnStartStage.ENDED)
         clear(invalid)
         return true
     }
 
     private fun checkPermission(request: Request, allowDialog: Boolean) {
+        request.startup?.mark(VpnStartStage.PERMISSION_CHECK)
         report(request, if (allowDialog) R.string.vpn_permission_check else R.string.vpn_permission_check_return)
         val context = activity.applicationContext
         request.check = VpnConnection.systemCalls.submit {
@@ -118,6 +133,7 @@ internal class VpnConsent(
                     return@submit
                 }
                 val consent = VpnService.prepare(context)
+                request.startup?.mark(VpnStartStage.PERMISSION_CHECKED)
                 main.post {
                     if (!isCurrent(request)) return@post
                     request.check = null
@@ -135,6 +151,7 @@ internal class VpnConsent(
 
     private fun launchDialog(request: Request, consent: Intent) {
         request.dialogLaunched = true
+        request.startup?.mark(VpnStartStage.CONSENT_DIALOG)
         armDeadline(request, RESULT_TIMEOUT_MS)
         report(request, R.string.vpn_waiting_permission)
         try {
@@ -149,6 +166,7 @@ internal class VpnConsent(
         val launcher = activity.activityResultRegistry.register(request.key, ActivityResultContracts.StartActivityForResult()) { result ->
             if (!isCurrent(request) || request.resultReceived) return@register
             request.resultReceived = true
+            request.startup?.mark(VpnStartStage.CONSENT_RESULT)
             when (result.resultCode) {
                 Activity.RESULT_OK -> {
                     report(request, R.string.vpn_permission_result_ok)
@@ -169,7 +187,7 @@ internal class VpnConsent(
     private fun complete(request: Request) {
         detach(request)
         try {
-            granted(request.automatic, request.profileId)
+            granted(request.automatic, request.profileId, request.startup)
         } finally {
             VpnConnection.releasePreparation(request.key)
         }
@@ -196,6 +214,7 @@ internal class VpnConsent(
 
     private fun fail(request: Request, message: Int, error: Boolean = true) {
         if (!isCurrent(request)) return
+        request.startup?.mark(VpnStartStage.ENDED)
         clear(request)
         status(message, error)
     }
@@ -232,6 +251,7 @@ internal class VpnConsent(
         const val RESULT_RECEIVED = "vpn_permission_result_received"
         const val AUTOMATIC = "vpn_permission_automatic"
         const val PROFILE = "vpn_permission_profile"
+        const val STARTUP = "vpn_permission_startup"
         const val CHECK_TIMEOUT_MS = 30_000L
         const val RESULT_TIMEOUT_MS = 60_000L
     }

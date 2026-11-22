@@ -41,10 +41,20 @@ class QuickControlsUiTest {
             instrumentation.uiAutomation.waitForIdle(500, 8_000)
             assertTrue(shell("cmd statusbar click-tile $component").isBlank())
             await("AWG service started by the system tile") {
-                VpnConnection.phase == VpnPhase.WAITING && notice(VpnNotifications.FOREGROUND_ID) != null
+                VpnConnection.phase == VpnPhase.WAITING && VpnConnection.serviceLaunch == R.string.vpn_service_launch_accepted &&
+                    notice(VpnNotifications.FOREGROUND_ID) != null
             }
             var active: Long? = null
-            instrumentation.runOnMainSync { active = VpnConnection.attemptId }
+            instrumentation.runOnMainSync {
+                active = VpnConnection.attemptId
+                val timing = checkNotNull(VpnStartupTiming.last(VpnStartSource.TILE))
+                val stages = timing.snapshot().map { it.stage }
+                assertTrue(stages.containsAll(listOf(VpnStartStage.PROFILE_CACHED, VpnStartStage.PERMISSION_CHECKED,
+                    VpnStartStage.SERVICE_ACCEPTED, VpnStartStage.FOREGROUND_READY, VpnStartStage.TUNNEL_UP)))
+                assertFalse(stages.contains(VpnStartStage.WINDOW_REQUESTED))
+                assertFalse(stages.contains(VpnStartStage.WINDOW_RESUMED))
+                assertFalse(stages.contains(VpnStartStage.HANDSHAKE_CONFIRMED))
+            }
             assertNotNull(active)
             assertStartingNotice(VpnNoticeStatus.CONNECTING)
 

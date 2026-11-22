@@ -1,8 +1,10 @@
 package com.kachur.vpn
 
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import org.amnezia.awg.config.BadConfigException
@@ -26,6 +28,7 @@ internal class VpnStartOptions(
     val routePlan: IpRoutePlan? = null,
     val profileId: String? = null,
     val profileName: String? = null,
+    val startup: VpnStartupTrace? = null,
 ) {
     val exclusions: Set<String> get() = routing.apps
 
@@ -84,6 +87,7 @@ internal object VpnConnection {
     private class Attempt(val id: Long, val context: Context, var options: VpnStartOptions?) {
         val profileId = options?.profileId
         val profileName = options?.profileName
+        var startup = options?.startup
         var request: Future<*>? = null
         var deadline: Runnable? = null
         var cancelService: (() -> Unit)? = null
@@ -148,17 +152,23 @@ internal object VpnConnection {
         country: String = context.getString(R.string.vpn_country_default),
         profileId: String? = null,
         profileName: String? = null,
-    ) {
-        start(context, VpnStartOptions(config, SplitTunnelingSettings(context).snapshot(), country,
-            profileId = profileId, profileName = profileName))
-    }
+        startup: VpnStartupTrace? = null,
+        routing: VpnRoutingSettings = SplitTunnelingSettings(context).snapshot(),
+        onBackgroundStartDenied: (() -> Unit)? = null,
+    ): Boolean = start(context, VpnStartOptions(config, routing, country,
+        profileId = profileId, profileName = profileName, startup = startup), onBackgroundStartDenied)
 
-    private fun start(context: Context, options: VpnStartOptions) {
-        if (phase != VpnPhase.IDLE) return
+    private fun start(
+        context: Context, options: VpnStartOptions, onBackgroundStartDenied: (() -> Unit)? = null,
+    ): Boolean {
+        if (phase != VpnPhase.IDLE) return false
+        val trace = options.startup
+        trace?.mark(VpnStartStage.ROUTES_READY)
         val attempt = Attempt(++nextAttempt, context.applicationContext, options)
         active = attempt
         serviceLaunch = R.string.vpn_requesting_service
         serviceResponse = R.string.vpn_service_awaiting_reply
+        trace?.mark(VpnStartStage.SERVICE_REQUESTED)
         publish(VpnPhase.STARTING, R.string.vpn_requesting_service)
         setDeadline(attempt, STARTUP_TIMEOUT_MS) {
             val error = when {
@@ -177,12 +187,18 @@ internal object VpnConnection {
             stopAttempt(attempt, error, VpnError(error))
         }
         attempt.request = systemCalls.submit {
+            var restricted = false
+            trace?.mark(VpnStartStage.SERVICE_CALL)
             val accepted = try {
                 val service = Intent(context, AwgVpnService::class.java).putExtra(EXTRA_ATTEMPT, attempt.id)
                 context.startForegroundService(service) != null
-            } catch (_: RuntimeException) {
+            } catch (failure: RuntimeException) {
+                restricted = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    failure is ForegroundServiceStartNotAllowedException
                 false
             }
+            if (accepted) trace?.mark(VpnStartStage.SERVICE_ACCEPTED)
+            if (restricted) trace?.mark(VpnStartStage.SERVICE_RESTRICTED)
             main.post {
                 if (active !== attempt || phase == VpnPhase.STOPPING) return@post
                 attempt.request = null
@@ -191,10 +207,14 @@ internal object VpnConnection {
                     record(serviceLaunch)
                 } else {
                     if (attempt.cancelService == null) serviceResponse = R.string.vpn_service_no_response_yet
+                    val fallback = onBackgroundStartDenied.takeIf { restricted && attempt.cancelService == null }
+                    if (fallback != null) attempt.startup = null
                     stopAttempt(attempt, R.string.vpn_service_rejected, error = VpnError(R.string.vpn_service_rejected))
+                    fallback?.invoke()
                 }
             }
         }
+        return true
     }
 
     fun claim(id: Long, cancel: () -> Unit): VpnStartOptions? {
@@ -202,6 +222,7 @@ internal object VpnConnection {
         if (attempt.cancelService != null) return null
         val options = attempt.options ?: return null
         attempt.cancelService = cancel
+        attempt.startup?.mark(VpnStartStage.SERVICE_ENTERED)
         serviceResponse = R.string.vpn_service_started
         publish(VpnPhase.STARTING, R.string.vpn_service_started)
         return options
@@ -257,6 +278,7 @@ internal object VpnConnection {
 
     fun handshake(id: Long) {
         if (ownsAttempt(id) && (phase == VpnPhase.WAITING || phase == VpnPhase.RECOVERING)) {
+            active?.startup?.mark(VpnStartStage.HANDSHAKE_CONFIRMED)
             publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
         }
     }
@@ -454,6 +476,7 @@ internal object VpnConnection {
     private fun finish(attempt: Attempt, message: Int, error: VpnError? = null) {
         clearDeadline(attempt)
         cancelRoutingCheck(attempt)
+        attempt.startup?.mark(VpnStartStage.ENDED)
         attempt.options = null
         attempt.restart = null
         attempt.cancelService = null

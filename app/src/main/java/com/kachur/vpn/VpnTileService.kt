@@ -5,6 +5,7 @@ import android.app.StatusBarManager
 import android.content.ComponentName
 import android.graphics.drawable.Icon
 import android.os.Build
+import android.os.SystemClock
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.Toast
@@ -32,6 +33,7 @@ class VpnTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        val clickedAt = SystemClock.elapsedRealtime()
         val requested = VpnConnection.noticeStatus
         val phase = VpnConnection.phase
         if (requested.tileState(phase) == Tile.STATE_UNAVAILABLE) return
@@ -42,7 +44,7 @@ class VpnTileService : TileService() {
             when (requested) {
                 VpnNoticeStatus.OFF -> if (VpnConnection.noticeStatus == VpnNoticeStatus.OFF &&
                     stopped == VpnConnection.manualStopGeneration && reset == VpnConnection.resetGeneration
-                ) launchQuickWindow()
+                ) VpnTileStart.start(this, clickedAt, ::launchQuickWindow)
                 VpnNoticeStatus.CONNECTING, VpnNoticeStatus.CONNECTED, VpnNoticeStatus.RECONNECTING ->
                     attempt?.let(VpnConnection::stopFromNotification)
                 else -> Unit
@@ -70,15 +72,17 @@ class VpnTileService : TileService() {
     }
 
     @Suppress("DEPRECATION")
-    private fun launchQuickWindow() {
+    private fun launchQuickWindow(key: String): Boolean {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startActivityAndCollapse(VpnQuickActivity.pendingIntent(this))
+                startActivityAndCollapse(VpnQuickActivity.tilePendingIntent(this, key))
             } else {
-                startActivityAndCollapse(VpnQuickActivity.intent(this))
+                startActivityAndCollapse(VpnQuickActivity.tileIntent(this, key))
             }
+            return true
         } catch (_: RuntimeException) {
             Toast.makeText(this, R.string.vpn_quick_interrupted, Toast.LENGTH_SHORT).show()
+            return false
         }
     }
 }

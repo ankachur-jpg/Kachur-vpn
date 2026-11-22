@@ -12,6 +12,7 @@ import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputFilter
 import android.text.SpannableString
@@ -195,7 +196,7 @@ class MainActivity : KachurActivity() {
     }
 
     override fun onDestroy() {
-        consent.cancel()
+        consent.cancel(preserveTrace = isChangingConfigurations)
         session.onChange = null
         super.onDestroy()
     }
@@ -373,6 +374,7 @@ class MainActivity : KachurActivity() {
             details.visibility = if (detailsOpen) View.VISIBLE else View.GONE
             chevron.rotation = if (detailsOpen) 90f else 0f
             ViewCompat.setStateDescription(this, getString(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details))
+            if (detailsOpen) renderConnection()
         }
     }
 
@@ -639,7 +641,7 @@ class MainActivity : KachurActivity() {
         renderPower(phase, blocked, error)
         renderProtection(phase, error)
         renderTraffic()
-        connectionDiagnostics.text = getString(
+        val summary = getString(
             R.string.vpn_diagnostic_summary,
             VpnConnection.eventNumber,
             getString(VpnConnection.lastEvent),
@@ -650,6 +652,8 @@ class MainActivity : KachurActivity() {
             getString(VpnConnection.serviceResponse),
             VpnConnection.lastError?.display(this) ?: getString(R.string.vpn_no_error),
         )
+        val timing = if (detailsOpen) VpnStartupTiming.display(this) else ""
+        connectionDiagnostics.text = if (timing.isEmpty()) summary else "$summary\n\n$timing"
     }
 
     private fun renderPower(phase: VpnPhase, blocked: Int?, error: Boolean) {
@@ -798,6 +802,7 @@ class MainActivity : KachurActivity() {
     }
 
     private fun toggleVpn() {
+        val startedAt = SystemClock.elapsedRealtime()
         if (connectionButtonBlockReason() != null) return
         permissionMessage = null
         VpnConnection.record(R.string.vpn_connect_pressed)
@@ -810,7 +815,9 @@ class MainActivity : KachurActivity() {
             return
         }
         session.openChecked = true
-        consent.begin(automatic = false)
+        val startup = VpnStartupTiming.begin(VpnStartSource.APP, startedAt)
+        startup.mark(VpnStartStage.PROFILE_CACHED)
+        if (!consent.begin(automatic = false, startup = startup)) startup.mark(VpnStartStage.ENDED)
     }
 
     private fun maybeAutoConnect() {
@@ -835,25 +842,29 @@ class MainActivity : KachurActivity() {
         consent.begin(automatic = false, profileId = pending.id)
     }
 
-    private fun startWithPermission(automatic: Boolean, profileId: String?) {
+    private fun startWithPermission(automatic: Boolean, profileId: String?, startup: VpnStartupTrace?) {
         permissionMessage = null
         if ((profileId == null && VpnConnection.phase != VpnPhase.IDLE) ||
             (automatic && (!launchSettings.enabled || launchSettings.paused))
         ) {
+            startup?.mark(VpnStartStage.ENDED)
             renderConnection()
             return
         }
         VpnConnection.record(R.string.vpn_permission_granted)
         val profile = session.profile
         if (profile == null) {
+            startup?.mark(VpnStartStage.ENDED)
             showPermissionMessage(R.string.vpn_profile_required, error = true)
         } else if ((profileId != null && profileId != profile.documentKey) ||
             session.savedRevision != applicationContext.localProfiles().revision()
         ) {
+            startup?.mark(VpnStartStage.ENDED)
             showPermissionMessage(R.string.profiles_selection_changed, error = true)
         } else if (VpnConnection.phase == VpnPhase.IDLE) {
             if (!automatic) launchSettings.setPaused(false)
-            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey), profile.documentKey, profile.name)
+            VpnConnection.start(applicationContext, profile.config, labels.country(profile.documentKey),
+                profile.documentKey, profile.name, startup = startup)
         } else {
             VpnConnection.switchProfile(applicationContext, profile, labels.country(profile.documentKey), session.savedRevision)
         }

@@ -21,6 +21,36 @@ class LocalProfilesTest {
     private val context: Context get() = RuntimeEnvironment.getApplication()
 
     @Test
+    fun quickSelectionDecryptsOnceAndFollowsEditsAndRestore() {
+        val first = fixture("First", "a")
+        val second = fixture("Second", "b")
+        context.localProfiles().append(listOf(first, second))
+        var keyUses = 0
+        val store = LocalProfiles(context) {
+            keyUses++
+            SecretKeySpec(ByteArray(32) { 42 }, "AES")
+        }
+        val cold = store.readSelected()
+        assertFalse(cold.fromCache)
+        assertEquals(first.documentKey, cold.selected.profile?.documentKey)
+        val warm = store.readSelected()
+        assertTrue(warm.fromCache)
+        assertEquals(cold.selected.revision, warm.selected.revision)
+        assertEquals(1, keyUses)
+
+        store.select(second.documentKey)
+        assertEquals(second.documentKey, store.readSelected().selected.profile?.documentKey)
+        val restored = ProfileCatalog(listOf(first), first.documentKey)
+        val preferences = SplitTunnelingSettings(context).preferences
+        synchronized(SplitTunnelingSettings.ipSettingsLock) {
+            assertTrue(store.put(preferences.edit(), store.seal(restored), store.revision() + 1).commit())
+        }
+        val afterRestore = store.readSelected()
+        assertFalse(afterRestore.fromCache)
+        assertEquals(first.documentKey, afterRestore.selected.profile?.documentKey)
+    }
+
+    @Test
     fun migratesTheEncryptedSingleProfileAndKeepsItsIdentityCountryAndSettings() {
         val old = fixture("Original", "a")
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")

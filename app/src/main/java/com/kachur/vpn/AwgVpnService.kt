@@ -112,6 +112,7 @@ class AwgVpnService : VpnService() {
             try {
                 notifications.prepare()
                 startForeground(VpnNotifications.FOREGROUND_ID, notifications.build(initialNotice, id))
+                claimed.startup?.mark(VpnStartStage.FOREGROUND_READY)
             } catch (_: RuntimeException) {
                 main.post { if (!closing) VpnConnection.serviceFailed(id, R.string.vpn_foreground_error) }
                 return@execute
@@ -156,26 +157,32 @@ class AwgVpnService : VpnService() {
         }
         reportedStatsError = false
         try {
+            val trace = options.startup.takeUnless { reconnecting }
+            trace?.mark(VpnStartStage.CONFIG_CHECK)
             report(id, token, R.string.vpn_checking_profile)
             val config = options.profile.toBackendConfig(options.exclusions)
             val routePlan = options.routePlan ?: config.ipRoutePlan(options.routing.ipRoutes)
             if (!current(token)) return
+            trace?.mark(VpnStartStage.CONFIG_READY)
             report(id, token, R.string.vpn_loading_engine)
             val engine = if (routePlan == null) GoBackend(applicationContext, this)
                 else GoBackend(applicationContext, this, routePlan::configure)
             backend = engine
             if (!current(token)) return
+            trace?.mark(VpnStartStage.ENGINE_READY)
             report(id, token, R.string.vpn_starting)
             check(engine.setState(tunnel, Tunnel.State.UP, config) == Tunnel.State.UP)
             if (!current(token)) return
+            trace?.mark(VpnStartStage.TUNNEL_UP)
             // The normal empty AWG packet starts negotiation, even with PersistentKeepalive disabled.
-            val provingRecovery = reconnecting && engine.requestHandshake(tunnel)
+            val probing = engine.requestHandshake(tunnel)
+            if (probing) trace?.mark(VpnStartStage.HANDSHAKE_REQUESTED)
             main.post {
                 if (current(token)) {
                     // A profile without a peer endpoint waits for the peer to initiate.
-                    if (reconnecting && !provingRecovery) recovery.finishRecovery()
-                    VpnConnection.tunnelReady(id, provingRecovery)
-                    startStatistics(id, token, engine)
+                    if (reconnecting && !probing) recovery.finishRecovery()
+                    VpnConnection.tunnelReady(id, probing)
+                    startStatistics(id, token, engine, probing)
                 }
             }
         } catch (_: TooManyVpnRoutesException) {
@@ -208,17 +215,21 @@ class AwgVpnService : VpnService() {
         main.post { if (current(token)) VpnConnection.progress(id, message) }
     }
 
-    private fun startStatistics(id: Long, token: Long, engine: GoBackend) {
+    private fun startStatistics(id: Long, token: Long, engine: GoBackend, probing: Boolean) {
         if (!current(token)) return
+        var firstRead = true
         polling = VpnStatisticsPolling(main, needsFastStatistics()) { completed ->
+            val startup = options?.startup.takeIf { firstRead }
+            firstRead = false
             backendWorker.execute {
                 try {
+                    if (current(token)) startup?.mark(VpnStartStage.FIRST_SAMPLE)
                     pollTunnel(id, token, engine)
                 } finally {
                     main.post { completed() }
                 }
             }
-        }.also { it.start() }
+        }.also { it.start(probingHandshake = probing) }
     }
 
     private fun needsFastStatistics(): Boolean =
@@ -252,6 +263,7 @@ class AwgVpnService : VpnService() {
                 if (!current(token)) return@post
                 traffic = if (rx >= 0L && tx >= 0L) VpnTraffic(rx, tx) else null
                 if (connectedAt == 0L && handshake > 0L && recovery.handshakeReceived()) {
+                    polling?.handshakeObserved()
                     connectedAt = handshake.coerceAtMost(System.currentTimeMillis())
                     VpnConnection.handshake(id)
                 } else {

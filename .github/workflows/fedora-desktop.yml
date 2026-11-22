@@ -25,3 +25,4 @@ jobs:
       - name: Syntax check
         run: |
           python3 -m compileall -q desktop/fedora/kachur_fedora
+          python3 -m py_compile desktop/fedora/kachur-vpn-helper

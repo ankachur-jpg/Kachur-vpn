@@ -221,6 +221,8 @@ def import_profile(source_path: str) -> None:
     data = _read_source(source_path)
     normalized = validate_profile(data).encode("utf-8")
     DEST_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if DEST_DIR.is_symlink() or not stat.S_ISDIR(DEST_DIR.lstat().st_mode):
+        raise ProfileError("Каталог профилей не является обычным каталогом; импорт остановлен.")
     os.chown(DEST_DIR, 0, 0)
     os.chmod(DEST_DIR, 0o700)
 

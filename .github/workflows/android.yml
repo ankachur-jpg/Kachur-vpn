@@ -60,17 +60,29 @@ jobs:
           go mod edit -require=github.com/amnezia-vpn/amneziawg-go@v0.2.18
           GOTOOLCHAIN=local go test -mod=mod -timeout=45s .
 
-      - name: Test and build debug APK
-        run: gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest --stacktrace
+      - name: Test and build debug and unsigned release APKs
+        run: gradle testDebugUnitTest assembleDebug assembleDebugAndroidTest assembleRelease --stacktrace
 
       - name: Verify AmneziaWG binaries and licenses in APK
         run: |
-          apk=app/build/outputs/apk/debug/app-debug.apk
-          for abi in arm64-v8a armeabi-v7a x86_64 x86; do
-            unzip -Z1 "$apk" | grep -Fx "lib/$abi/libwg-go.so"
+          for apk in app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/release/app-release-unsigned.apk; do
+            for abi in arm64-v8a armeabi-v7a x86_64 x86; do
+              unzip -Z1 "$apk" | grep -Fx "lib/$abi/libwg-go.so"
+            done
+            unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/amneziawg-android.txt"
+            unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/github.com_amnezia-vpn_amneziawg-go_v3-LICENSE.txt"
           done
-          unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/amneziawg-android.txt"
-          unzip -Z1 "$apk" | grep -Fx "assets/amneziawg-licenses/github.com_amnezia-vpn_amneziawg-go_v3-LICENSE.txt"
+
+      - name: Verify the release build uses no signing credentials
+        run: |
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=app/build/outputs/apk/release/app-release-unsigned.apk
+          test -s "$apk"
+          if "$tools/apksigner" verify "$apk" >/dev/null 2>&1; then
+            echo "Release verification expects the unsigned Gradle output" >&2
+            exit 1
+          fi
+          "$tools/aapt2" dump badging "$apk" | sed -n '/^package:/p'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

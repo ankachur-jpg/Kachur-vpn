@@ -1,0 +1,24 @@
+.gradle/
+.kotlin/
+build/
+local.properties
+.upstream-awg/
+/dist/
+
+# Local signing inputs and private VPN files.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pkcs12
+*.key
+*.pem
+keystore.properties
+signing.properties
+keystore-password*
+signing-password*
+.env
+.env.*
+*.conf
+*.kvb
+private/

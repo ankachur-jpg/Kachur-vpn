@@ -49,6 +49,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.current_state = VPNState(False)
         self.busy = False
         self._refresh_running = False
+        self._handshake_check_running = False
+        self._handshake_checked = False
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -119,7 +121,20 @@ class MainWindow(Adw.ApplicationWindow):
         body.append(stats)
         self.rx = self.add_stat(stats, "Получено", "0 Б")
         self.tx = self.add_stat(stats, "Отправлено", "0 Б")
-        self.handshake = self.add_stat(stats, "Handshake", "Пока нет")
+        self.handshake = self.add_stat(stats, "Handshake", "Не проверен")
+
+        self.handshake_button = Gtk.Button(label="Проверить handshake")
+        self.handshake_button.set_tooltip_text(
+            "Однократная проверка через системный запрос прав администратора"
+        )
+        self.handshake_button.connect("clicked", self.on_check_handshake)
+        body.append(self.handshake_button)
+        body.append(label(
+            "Автообновление счётчиков не запрашивает права администратора. "
+            "Для чтения времени handshake нажмите кнопку: появится отдельный "
+            "системный запрос. Пароль не сохраняется.",
+            "kachur-subtitle",
+        ))
 
         self.message = label("", "kachur-subtitle")
         self.message.set_selectable(True)
@@ -148,12 +163,12 @@ class MainWindow(Adw.ApplicationWindow):
         return result
 
     def _tick(self) -> bool:
-        if not self.busy:
+        if not self.busy and not self._handshake_check_running:
             self.refresh()
         return GLib.SOURCE_CONTINUE
 
     def refresh(self, *_args: object) -> None:
-        if self.busy or self._refresh_running:
+        if self.busy or self._refresh_running or self._handshake_check_running:
             return
         try:
             name = check_interface(self.profile.get_text())
@@ -167,11 +182,55 @@ class MainWindow(Adw.ApplicationWindow):
                 state, error = read_state(name), ""
             except VPNError as exc:
                 state, error = None, str(exc)
-            GLib.idle_add(self._show_state, name, state, error)
+            GLib.idle_add(self._show_state, name, state, error, True)
 
         Thread(target=worker, daemon=True).start()
 
-    def _show_state(self, name: str, state: VPNState | None, error: str) -> bool:
+    def on_check_handshake(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running:
+            return
+        if not self.current_state.active:
+            self.message.set_text("Интерфейс kch0 не запущен. Сначала подключите Kachur VPN.")
+            return
+        try:
+            name = check_interface(self.profile.get_text())
+        except VPNError as exc:
+            self.message.set_text(str(exc))
+            return
+
+        self._handshake_check_running = True
+        self.handshake_button.set_sensitive(False)
+        self.message.set_text(
+            "Проверяем handshake. Может появиться системный запрос прав администратора."
+        )
+
+        def worker() -> None:
+            try:
+                state, error = read_state(name, check_handshake=True), ""
+            except VPNError as exc:
+                state, error = None, str(exc)
+            GLib.idle_add(self._handshake_finished, name, state, error)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _handshake_finished(
+        self, name: str, state: VPNState | None, error: str
+    ) -> bool:
+        self._handshake_check_running = False
+        self.handshake_button.set_sensitive(self.current_state.active and not self.busy)
+        if error:
+            self.message.set_text(error)
+            self.refresh()
+            return GLib.SOURCE_REMOVE
+        assert state is not None
+        self._handshake_checked = True
+        self._show_state(name, state, "", False)
+        return GLib.SOURCE_REMOVE
+
+    def _show_state(
+        self, name: str, state: VPNState | None, error: str,
+        preserve_handshake: bool = False,
+    ) -> bool:
         self._refresh_running = False
         if self.profile.get_text().strip() != name:
             return GLib.SOURCE_REMOVE
@@ -179,10 +238,31 @@ class MainWindow(Adw.ApplicationWindow):
             self.status.set_text("Статус недоступен")
             self.message.set_text(error)
             self.power.set_sensitive(False)
+            self.handshake_button.set_sensitive(False)
             return GLib.SOURCE_REMOVE
         assert state is not None
+
+        # Keep the last explicitly checked timestamp while counters auto-refresh.
+        if (
+            preserve_handshake and state.active and not state.last_handshake
+            and self.current_state.active and self.current_state.last_handshake
+        ):
+            state = VPNState(
+                True, state.received, state.sent, self.current_state.last_handshake
+            )
+        if not state.active:
+            self._handshake_checked = False
+
         self.current_state = state
-        self.status.set_text(("Подключено • handshake подтверждён" if state.last_handshake else "Туннель запущен • handshake не проверен") if state.active else "VPN выключен")
+        if state.active and state.last_handshake:
+            status_text = "Туннель активен • handshake получен"
+        elif state.active and self._handshake_checked:
+            status_text = "Туннель активен • handshake не получен"
+        elif state.active:
+            status_text = "Туннель запущен • handshake не проверен"
+        else:
+            status_text = "VPN выключен"
+        self.status.set_text(status_text)
         if state.active and state.last_handshake:
             self.status.add_css_class("kachur-connected")
         else:
@@ -194,13 +274,18 @@ class MainWindow(Adw.ApplicationWindow):
         self.power.set_label("⏻  Отключить VPN" if state.active else "⏻  Включить VPN")
         self.rx.set_text(pretty_bytes(state.received))
         self.tx.set_text(pretty_bytes(state.sent))
-        self.handshake.set_text(pretty_handshake(state.last_handshake))
+        self.handshake.set_text(
+            pretty_handshake(state.last_handshake)
+            if state.last_handshake else
+            ("Не получен" if self._handshake_checked else "Не проверен")
+        )
         self.message.set_text("")
         self.power.set_sensitive(not self.busy)
+        self.handshake_button.set_sensitive(state.active and not self.busy)
         return GLib.SOURCE_REMOVE
 
     def on_toggle(self, *_args: object) -> None:
-        if self.busy:
+        if self.busy or self._handshake_check_running:
             return
         try:
             name = check_interface(self.profile.get_text())
@@ -209,7 +294,9 @@ class MainWindow(Adw.ApplicationWindow):
             return
         connect = not self.current_state.active
         self.busy = True
+        self._handshake_checked = False
         self.power.set_sensitive(False)
+        self.handshake_button.set_sensitive(False)
         self.status.set_text("Подключаем…" if connect else "Отключаем…")
         self.message.set_text("Может появиться системный запрос пароля администратора.")
 

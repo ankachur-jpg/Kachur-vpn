@@ -8,6 +8,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -21,6 +22,7 @@ import android.text.InputFilter
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.format.Formatter
+import android.text.style.ImageSpan
 import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
@@ -327,7 +329,6 @@ class MainActivity : KachurActivity() {
             minHeight = dp(72)
             textSize = 21f
             includeFontPadding = false
-            compoundDrawablePadding = dp(10)
             setPaddingRelative(dp(12), dp(12), dp(12), dp(12))
             setOnClickListener { toggleVpn() }
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -597,15 +598,18 @@ class MainActivity : KachurActivity() {
 
     private fun renderTraffic() {
         val reading = VpnTrafficUi.latest.takeIf { VpnConnection.phase == VpnPhase.HANDSHAKE }
-        val missing = getString(R.string.ui_traffic_unavailable)
-        val receiveText = reading?.traffic?.let { Formatter.formatShortFileSize(this, it.received) } ?: missing
-        val sendText = reading?.traffic?.let { Formatter.formatShortFileSize(this, it.sent) } ?: missing
-        val durationText = reading?.elapsedSeconds?.let {
+        received.renderMetric(reading?.traffic?.let { Formatter.formatShortFileSize(this, it.received) })
+        sent.renderMetric(reading?.traffic?.let { Formatter.formatShortFileSize(this, it.sent) })
+        duration.renderMetric(reading?.elapsedSeconds?.let {
             getString(R.string.ui_session_duration, it / 3600, it / 60 % 60, it % 60)
-        } ?: missing
-        if (received.text != receiveText) received.text = receiveText
-        if (sent.text != sendText) sent.text = sendText
-        if (duration.text != durationText) duration.text = durationText
+        })
+    }
+
+    private fun TextView.renderMetric(value: String?) {
+        val displayed = value ?: getString(R.string.ui_metric_empty)
+        if (text == displayed) return
+        text = displayed
+        contentDescription = if (value == null) getString(R.string.ui_traffic_unavailable) else null
     }
 
     private fun selectConfig() {
@@ -711,13 +715,6 @@ class MainActivity : KachurActivity() {
             else -> R.string.connect_vpn
         })
         val label = getString(state)
-        val showAction = phase == VpnPhase.IDLE && blocked == null || uiStackControls() && blocked == null
-        val text = if (showAction) "$label\n$action" else label
-        if (connectButton.text.toString() != text) {
-            connectButton.text = SpannableString(text).apply {
-                if (showAction) setSpan(RelativeSizeSpan(0.72f), label.length + 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            }
-        }
         val description = getString(R.string.ui_power_accessible, label, action)
         if (connectButton.contentDescription != description) connectButton.contentDescription = description
         val tone = when {
@@ -725,18 +722,26 @@ class MainActivity : KachurActivity() {
             phase == VpnPhase.HANDSHAKE -> PowerTone.ACTIVE
             else -> PowerTone.READY
         }
-        if (powerTone == tone) return
-        powerTone = tone
         val compact = powerHalo == null
-        connectButton.setTextColor(tone.ink)
-        connectButton.background = powerDisc(tone, compact)
-        val glyph = checkNotNull(getDrawable(R.drawable.ic_ui_power)).mutate().apply {
-            setTint(tone.ink)
+        val showAction = blocked == null && (phase == VpnPhase.IDLE || compact)
+        val heading = "\uFFFC\n$label"
+        val text = if (showAction) "$heading\n$action" else heading
+        if (connectButton.text.toString() != text || powerTone != tone) {
+            val glyph = checkNotNull(getDrawable(R.drawable.ic_ui_power)).mutate().apply { setTint(tone.ink) }
             val size = dp(if (compact) 30 else 48)
-            setBounds(0, 0, size, size)
+            val spacing = dp(10)
+            val icon = InsetDrawable(glyph, 0, 0, 0, spacing).apply { setBounds(0, 0, size, size + spacing) }
+            connectButton.text = SpannableString(text).apply {
+                setSpan(ImageSpan(icon, ImageSpan.ALIGN_BOTTOM), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (showAction) setSpan(RelativeSizeSpan(0.72f), heading.length + 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
         }
-        connectButton.setCompoundDrawablesRelative(null, glyph, null, null)
-        powerHalo?.background = PowerHaloDrawable(tone, getColor(R.color.ui_horizon))
+        if (powerTone != tone) {
+            powerTone = tone
+            connectButton.setTextColor(tone.ink)
+            connectButton.background = powerDisc(tone, compact)
+            powerHalo?.background = PowerHaloDrawable(tone, getColor(R.color.ui_horizon))
+        }
     }
 
     private fun renderProtection(phase: VpnPhase, error: Boolean) {

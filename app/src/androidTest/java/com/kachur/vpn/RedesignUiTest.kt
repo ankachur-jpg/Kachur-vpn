@@ -59,8 +59,9 @@ class RedesignUiTest {
                     checkPrimaryAction(activity)
                     assertContrast(activity)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) captureIconPreview(activity, "09-icon-dark")
-                    assertEquals(activity.getString(R.string.ui_traffic_unavailable),
-                        activity.findViewById<TextView>(R.id.ui_traffic_received).text.toString())
+                    val received = activity.findViewById<TextView>(R.id.ui_traffic_received)
+                    assertEquals(activity.getString(R.string.ui_metric_empty), received.text.toString())
+                    assertEquals(activity.getString(R.string.ui_traffic_unavailable), received.contentDescription.toString())
                 }
                 capture("01-home-dark", scenario)
                 try {
@@ -68,7 +69,7 @@ class RedesignUiTest {
                     scenario.onActivity { activity ->
                         VpnConnection.publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
                         val action = activity.findViewById<Button>(R.id.connect_vpn_button)
-                        assertEquals(activity.getString(R.string.vpn_notice_connected), action.text.toString())
+                        assertEquals(activity.getString(R.string.vpn_notice_connected), action.text.toString().substringAfter('\n'))
                         assertTrue(action.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
                         assertEquals(PowerTone.ACTIVE.ink, action.currentTextColor)
                         assertEquals(activity.getString(R.string.ui_protection_active),

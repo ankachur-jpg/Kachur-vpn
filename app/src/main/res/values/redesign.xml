@@ -9,6 +9,7 @@
     <string name="ui_sent">Отправлено</string>
     <string name="ui_session_time">Время сеанса</string>
     <string name="ui_session_duration">%1$02d:%2$02d:%3$02d</string>
+    <string name="ui_metric_empty">—</string>
     <string name="ui_traffic_unavailable">Нет данных</string>
     <string name="ui_details">Подробности подключения</string>
     <string name="ui_hide_details">Скрыть подробности</string>

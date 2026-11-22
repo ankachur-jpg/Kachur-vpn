@@ -1,5 +1,7 @@
 package com.kachur.vpn
 
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
@@ -13,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -56,8 +59,23 @@ class RedesignUiTest {
                         activity.findViewById<TextView>(R.id.ui_traffic_received).text.toString())
                 }
                 capture("01-home-dark", scenario)
+                try {
+                    // Exercise the presentation of a handshake without opening a real tunnel or accessing the network.
+                    scenario.onActivity { activity ->
+                        VpnConnection.publish(VpnPhase.HANDSHAKE, R.string.vpn_handshake_received)
+                        val action = activity.findViewById<Button>(R.id.connect_vpn_button)
+                        assertEquals(activity.getString(R.string.vpn_notice_connected), action.text.toString())
+                        assertTrue(action.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
+                        assertEquals(PowerTone.ACTIVE.ink, action.currentTextColor)
+                        assertEquals(activity.getString(R.string.ui_protection_active),
+                            activity.findViewById<TextView>(R.id.ui_protection_title).text.toString())
+                    }
+                    capture("11-home-connected-preview", scenario)
+                } finally {
+                    scenario.onActivity { VpnConnection.publish(VpnPhase.IDLE, R.string.vpn_disconnected) }
+                }
                 scenario.onActivity { activity ->
-                    activity.findViewById<Button>(R.id.ui_open_settings).performClick()
+                    activity.findViewById<View>(R.id.ui_open_settings).performClick()
                     assertTrue(activity.findViewById<View>(R.id.ui_settings_page).isShown)
                     assertTrue(activity.findViewById<Button>(R.id.ui_theme_choice).isShown)
                 }
@@ -126,12 +144,19 @@ class RedesignUiTest {
                 scenario.onActivity { activity ->
                     val scroll = activity.findViewById<ScrollView>(R.id.ui_home_scroll)
                     scroll.scrollTo(0, scroll.getChildAt(0).height)
-                    for (id in listOf(R.id.profiles_open, R.id.diag_open_screen, R.id.ui_open_settings)) {
+                    for (id in listOf(R.id.ui_home_tab, R.id.diag_open_screen, R.id.profiles_open)) {
                         val action = activity.findViewById<Button>(id)
                         assertTrue(action.getGlobalVisibleRect(android.graphics.Rect()))
-                        assertEquals(1, action.layout.lineCount)
-                        assertEquals(0, action.layout.getEllipsisCount(0))
+                        assertTrue(action.height >= activity.dp(48))
+                        for (line in 0 until action.layout.lineCount) assertEquals(0, action.layout.getEllipsisCount(line))
                     }
+                    assertTrue(activity.findViewById<View>(R.id.ui_connection_details)
+                        .performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertTrue(activity.findViewById<View>(R.id.reset_vpn_button).isShown)
+                    scroll.scrollTo(0, 0)
+                    assertTrue(activity.findViewById<View>(R.id.ui_open_settings)
+                        .performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null))
+                    assertTrue(activity.findViewById<View>(R.id.ui_theme_choice).isShown)
                 }
             }
         } finally {
@@ -140,13 +165,65 @@ class RedesignUiTest {
         }
     }
 
+    @Test
+    fun accessibilityTreeExposesActionsAndCanNavigateTheHomeScreen() {
+        setFontScale("1.0")
+        seedPreview()
+        val automation = instrumentation.uiAutomation
+        val service = automation.serviceInfo
+        val originalFlags = service.flags
+        service.flags = originalFlags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+        automation.serviceInfo = service
+        try {
+            ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+                awaitProfile(scenario)
+                val power = accessibleNode(R.id.connect_vpn_button)
+                assertEquals(Button::class.java.name, power.className.toString())
+                assertTrue(power.contentDescription.contains(context.getString(R.string.connect_vpn)))
+                assertTrue(power.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
+                waitFor { accessibleNode(R.id.connect_vpn_button).isAccessibilityFocused }
+
+                val server = accessibleNode(R.id.ui_server_card)
+                assertEquals(Button::class.java.name, server.className.toString())
+                assertTrue(server.contentDescription.contains(PREVIEW_PROFILE))
+                assertTrue(server.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                assertTrue(accessibleNode(R.id.profiles_import).isClickable)
+                assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+
+                assertTrue(accessibleNode(R.id.ui_open_settings).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                assertTrue(accessibleNode(R.id.ui_theme_choice).isClickable)
+                assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+
+                val homeTab = accessibleNode(R.id.ui_home_tab)
+                assertTrue(homeTab.isSelected)
+                assertTrue(accessibleNode(R.id.diag_open_screen).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                assertTrue(accessibleNode(R.id.diag_run).isClickable)
+                assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
+            }
+        } finally {
+            service.flags = originalFlags
+            automation.serviceInfo = service
+        }
+    }
+
+    private fun accessibleNode(id: Int): AccessibilityNodeInfo {
+        val name = context.resources.getResourceName(id)
+        var node: AccessibilityNodeInfo? = null
+        waitFor {
+            node = instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(name)
+                ?.firstOrNull { it.isVisibleToUser }
+            node != null
+        }
+        return checkNotNull(node)
+    }
+
     private fun seedPreview() {
         VpnLaunchSettings(context).setEnabled(false)
         val store = context.localProfiles()
         if (!store.exists()) {
             fun key(byte: Byte) = Base64.getEncoder().encodeToString(ByteArray(32) { byte })
             val demo = AwgConfigParser.parse("[Interface]\nPrivateKey=${key(1)}\n[Peer]\nPublicKey=${key(2)}")
-            val first = ImportedProfile("Домашний сервер", demo, "a".repeat(64))
+            val first = ImportedProfile(PREVIEW_PROFILE, demo, "a".repeat(64))
             val second = ImportedProfile("Резервный сервер", demo, "b".repeat(64))
             store.append(listOf(first, second))
             VpnProfileLabels(context).saveCountry(second.documentKey, "Нидерланды")
@@ -156,7 +233,7 @@ class RedesignUiTest {
 
     private fun awaitProfile(scenario: ActivityScenario<MainActivity>) = waitFor {
         var loaded = false
-        scenario.onActivity { loaded = it.findViewById<TextView>(R.id.profile_name).text.toString() == "Домашний сервер" }
+        scenario.onActivity { loaded = it.findViewById<TextView>(R.id.profile_name).text.toString() == PREVIEW_PROFILE }
         loaded
     }
 
@@ -166,17 +243,22 @@ class RedesignUiTest {
         val visible = android.graphics.Rect()
         assertTrue(action.getGlobalVisibleRect(visible))
         assertEquals(action.height, visible.height())
-        assertEquals(activity.getString(R.string.connect_vpn), action.createAccessibilityNodeInfo().text.toString())
+        assertTrue(action.createAccessibilityNodeInfo().contentDescription.contains(activity.getString(R.string.connect_vpn)))
     }
 
     private fun assertContrast(activity: Activity) {
         for ((foreground, background) in listOf(
             R.color.ui_text to R.color.ui_surface,
+            R.color.ui_text to R.color.ui_surface_high,
+            R.color.ui_muted to R.color.ui_surface_high,
             R.color.ui_good to R.color.ui_good_surface,
             R.color.ui_on_primary to R.color.ui_primary_start,
             R.color.ui_on_primary to R.color.ui_primary_end,
         )) {
             assertTrue(ColorUtils.calculateContrast(activity.getColor(foreground), activity.getColor(background)) >= 4.5)
+        }
+        for (tone in PowerTone.entries) {
+            assertTrue(ColorUtils.calculateContrast(tone.ink, tone.shade) >= 4.5)
         }
     }
 
@@ -329,5 +411,9 @@ class RedesignUiTest {
             Thread.sleep(40)
         } while (System.nanoTime() < deadline)
         assertTrue("Screen did not finish laying out", ready())
+    }
+
+    private companion object {
+        const val PREVIEW_PROFILE = "Frankfurt am Main"
     }
 }

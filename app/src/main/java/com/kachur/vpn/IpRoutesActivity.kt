@@ -63,11 +63,11 @@ class IpRoutesActivity : KachurActivity() {
         header.uiAdd(uiHeader(R.string.ip_title) { finish() })
         header.uiAdd(uiCaption(R.string.ip_description), 12)
         header.uiAdd(uiCard().apply {
-            val sources = uiButton(R.string.ip_update_title).apply {
+            val sources = uiSettingsLink(R.string.ip_update_title, R.drawable.ic_ui_routes).apply {
                 id = R.id.ip_open_sources
                 setOnClickListener { startActivity(Intent(this@IpRoutesActivity, IpSourcesActivity::class.java)) }
             }
-            importButton = uiButton(R.string.ip_import, primary = true).apply {
+            importButton = uiButton(R.string.ip_import, primary = true, icon = R.drawable.ic_ui_import).apply {
                 id = R.id.ip_import_button
                 setOnClickListener { openFilePicker() }
             }

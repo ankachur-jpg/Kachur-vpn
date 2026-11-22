@@ -5,9 +5,12 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputFilter
+import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupMenu
 import android.widget.TextView
@@ -38,7 +41,7 @@ class ProfilesActivity : KachurActivity() {
         pendingRemoval = savedInstanceState?.getString(PENDING_REMOVAL)
         val content = uiColumn(18)
         content.uiAdd(uiHeader(R.string.profiles_title) { finish() })
-        importButton = uiButton(R.string.profiles_import, primary = true).apply {
+        importButton = uiButton(R.string.profiles_import, primary = true, icon = R.drawable.ic_ui_import).apply {
             id = R.id.profiles_import
             setOnClickListener {
                 session.startPicker()
@@ -126,20 +129,28 @@ class ProfilesActivity : KachurActivity() {
         val profileId = profile.documentKey
         val selected = session.catalog.selectedId == profileId
         val inUse = VpnConnection.activeProfileId == profileId
+        val country = labels.country(profileId)
         val item = uiCard().apply {
-            if (selected) background = uiShape(R.color.ui_surface, 22, R.color.ui_accent)
+            if (selected) background = uiPanel(border = R.color.ui_accent)
         }
-        item.uiAdd(uiLabel(22, bold = true).apply {
-            text = profile.name
+        item.uiAdd(LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ImageView(this@ProfilesActivity).apply {
+                showServerBadge(country)
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, LinearLayout.LayoutParams(dp(46), dp(38)).apply { marginEnd = dp(12) })
+            addView(uiColumn().apply {
+                uiAdd(uiLabel(20, bold = true).apply { text = profile.name })
+                uiAdd(uiLabel(14, when {
+                    inUse -> R.color.ui_good
+                    selected -> R.color.ui_accent
+                    else -> R.color.ui_muted
+                }).apply {
+                    text = listOfNotNull(country, getString(R.string.profiles_selected).takeIf { selected },
+                        getString(R.string.profiles_in_use).takeIf { inUse }).joinToString(" · ")
+                }, 3)
+            }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         })
-        item.uiAdd(uiLabel(15, when {
-            inUse -> R.color.ui_good
-            selected -> R.color.ui_accent
-            else -> R.color.ui_muted
-        }).apply {
-            text = listOfNotNull(labels.country(profileId), getString(R.string.profiles_selected).takeIf { selected },
-                getString(R.string.profiles_in_use).takeIf { inUse }).joinToString(" · ")
-        }, 4)
         val connect = uiButton(
             if (VpnConnection.phase == VpnPhase.IDLE) R.string.profiles_connect else R.string.profiles_switch,
             primary = selected,

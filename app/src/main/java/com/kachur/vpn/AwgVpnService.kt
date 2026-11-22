@@ -250,13 +250,13 @@ class AwgVpnService : VpnService() {
             main.post {
                 if (!current(token)) return@post
                 traffic = if (rx >= 0L && tx >= 0L) VpnTraffic(rx, tx) else null
-                VpnTrafficUi.publish(id, traffic)
                 if (connectedAt == 0L && handshake > 0L && recovery.handshakeReceived()) {
                     connectedAt = handshake.coerceAtMost(System.currentTimeMillis())
                     VpnConnection.handshake(id)
                 } else {
                     renderNotification()
                 }
+                VpnTrafficUi.publish(id, traffic, connectedAt)
             }
         } catch (_: RuntimeException) {
             fail(id, token, R.string.vpn_handshake_read_error)

@@ -64,6 +64,7 @@ class DiagnosticsActivity : KachurActivity() {
             chartLegend = uiLabel(14, R.color.ui_muted)
             uiAdd(chartLegend, 8)
             chart = PingChart(this@DiagnosticsActivity)
+            chart.background = uiShape(R.color.ui_background, 14)
             addView(chart, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(118)).apply {
                 topMargin = dp(8)
             })

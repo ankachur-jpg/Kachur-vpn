@@ -50,11 +50,11 @@ class BackupActivity : KachurActivity() {
         layout.uiAdd(uiHeader(R.string.backup_title) { finish() })
         layout.uiAdd(uiCard().apply {
             uiAdd(uiCaption(R.string.backup_description))
-            export = uiButton(R.string.backup_export, primary = true).apply {
+            export = uiButton(R.string.backup_export, primary = true, icon = R.drawable.ic_ui_backup).apply {
                 id = R.id.backup_export
                 setOnClickListener { askPassword(true) { session.prepareExport(applicationContext, it) } }
             }
-            restore = uiButton(R.string.backup_open).apply {
+            restore = uiSettingsLink(R.string.backup_open, R.drawable.ic_ui_import).apply {
                 id = R.id.backup_open
                 setOnClickListener {
                     try { openDocument.launch(arrayOf("*/*")) } catch (_: RuntimeException) { session.status(R.string.backup_file_error) }

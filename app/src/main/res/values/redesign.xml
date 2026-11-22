@@ -4,12 +4,22 @@
     <string name="ui_diagnostics">Диагностика</string>
     <string name="ui_connection">Подключение</string>
     <string name="ui_selected_server">Выбранный сервер</string>
-    <string name="ui_traffic">Трафик сеанса</string>
-    <string name="ui_received">Получено</string>
+    <string name="ui_home_vpn">VPN</string>
+    <string name="ui_received">Загружено</string>
     <string name="ui_sent">Отправлено</string>
+    <string name="ui_session_time">Время сеанса</string>
+    <string name="ui_session_duration">%1$02d:%2$02d:%3$02d</string>
     <string name="ui_traffic_unavailable">Нет данных</string>
     <string name="ui_details">Подробности подключения</string>
     <string name="ui_hide_details">Скрыть подробности</string>
+    <string name="ui_protection_active">Соединение защищено</string>
+    <string name="ui_protection_summary">Трафик через VPN зашифрован</string>
+    <string name="ui_protection_inactive">VPN отключён</string>
+    <string name="ui_protection_hint">Подключите VPN для защиты трафика</string>
+    <string name="ui_protection_progress">Состояние соединения</string>
+    <string name="ui_power_recovering">Восстановление</string>
+    <string name="ui_power_waiting">Ожидание сервера</string>
+    <string name="ui_power_accessible">%1$s. %2$s</string>
     <string name="ui_appearance">Оформление</string>
     <string name="ui_theme">Тема</string>
     <string name="ui_theme_value">Тема · %1$s</string>
@@ -20,6 +30,9 @@
     <string name="ui_profile_action">%1$s · %2$s</string>
     <string name="ui_ping_legend">Максимум %1$s\nФиолетовый — напрямую. Бирюзовый — через VPN.</string>
     <item type="id" name="ui_open_settings" />
+    <item type="id" name="ui_home_tab" />
+    <item type="id" name="ui_server_card" />
+    <item type="id" name="ui_protection_title" />
     <item type="id" name="ui_home_scroll" />
     <item type="id" name="ui_settings_page" />
     <item type="id" name="ui_theme_choice" />
@@ -27,4 +40,5 @@
     <item type="id" name="ui_connection_details" />
     <item type="id" name="ui_traffic_received" />
     <item type="id" name="ui_traffic_sent" />
+    <item type="id" name="ui_session_time" />
 </resources>

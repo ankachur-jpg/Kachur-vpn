@@ -18,14 +18,17 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.core.view.AccessibilityDelegateCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import kotlin.math.roundToInt
 
 internal enum class AppAppearance(val label: Int, private val night: Int?) {
@@ -76,6 +79,9 @@ abstract class KachurActivity : ComponentActivity() {
 
 internal fun Context.dp(size: Int): Int = (resources.displayMetrics.density * size).roundToInt()
 
+internal fun Context.uiStackControls(): Boolean =
+    resources.configuration.fontScale >= 1.35f || resources.configuration.screenWidthDp in 1..339
+
 internal fun View.uiInsets() {
     val left = paddingLeft
     val top = paddingTop
@@ -113,8 +119,26 @@ internal fun Context.uiGradient(start: Int, end: Int, radius: Int): GradientDraw
         cornerRadius = dp(radius).toFloat()
     }
 
+internal fun Context.uiPanel(radius: Int = 18, border: Int = R.color.ui_border): GradientDrawable =
+    uiGradient(R.color.ui_surface_high, R.color.ui_surface, radius).apply { setStroke(dp(1), getColor(border)) }
+
 internal fun Context.uiCard(padding: Int = 16): LinearLayout = uiColumn(padding).apply {
-    background = uiShape(R.color.ui_surface, 22, R.color.ui_border)
+    background = uiPanel()
+}
+
+internal fun Context.uiActionRow(): LinearLayout = LinearLayout(this).apply {
+    gravity = Gravity.CENTER_VERTICAL
+    minimumHeight = dp(64)
+    setPaddingRelative(dp(14), dp(10), dp(14), dp(10))
+    background = RippleDrawable(ColorStateList.valueOf(getColor(R.color.ui_ripple)), uiPanel(), null)
+    isFocusable = true
+    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+    ViewCompat.setAccessibilityDelegate(this, object : AccessibilityDelegateCompat() {
+        override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfoCompat) {
+            super.onInitializeAccessibilityNodeInfo(host, info)
+            info.className = Button::class.java.name
+        }
+    })
 }
 
 internal fun LinearLayout.uiAdd(child: View, gap: Int = 0) {
@@ -137,6 +161,12 @@ internal fun Context.uiCaption(label: Int): TextView = uiLabel(14, R.color.ui_mu
 
 internal fun Context.uiGlyph(drawable: Int, color: Int = R.color.ui_accent): Drawable =
     requireNotNull(getDrawable(drawable)).mutate().apply { setTint(getColor(color)) }
+
+internal fun Context.uiDecorativeIcon(drawable: Int, color: Int = R.color.ui_accent): ImageView =
+    ImageView(this).apply {
+        setImageDrawable(uiGlyph(drawable, color))
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
 
 internal fun Context.uiButton(label: Int, primary: Boolean = false, icon: Int? = null): Button = Button(this).apply {
     if (label != 0) setText(label)
@@ -166,12 +196,23 @@ internal fun Context.uiButton(label: Int, primary: Boolean = false, icon: Int? =
     }
 }
 
-internal fun Context.uiIconButton(label: Int, glyph: Int): ImageButton = ImageButton(this).apply {
+internal fun Context.uiIconButton(label: Int, glyph: Int, quiet: Boolean = false): ImageButton = ImageButton(this).apply {
     contentDescription = getString(label)
     minimumWidth = dp(48)
     minimumHeight = dp(48)
     setImageDrawable(uiGlyph(glyph))
-    background = RippleDrawable(ColorStateList.valueOf(getColor(R.color.ui_ripple)), uiShape(R.color.ui_accent_soft, 16), null)
+    background = RippleDrawable(
+        ColorStateList.valueOf(getColor(R.color.ui_ripple)),
+        if (quiet) null else uiShape(R.color.ui_accent_soft, 14),
+        if (quiet) uiShape(android.R.color.white, 14) else null,
+    )
+}
+
+internal fun Context.uiSettingsLink(label: Int, glyph: Int): Button = uiButton(label, icon = glyph).apply {
+    gravity = Gravity.START or Gravity.CENTER_VERTICAL
+    setCompoundDrawablesRelativeWithIntrinsicBounds(
+        compoundDrawablesRelative[0], null, uiGlyph(R.drawable.ic_ui_chevron), null,
+    )
 }
 
 internal fun Context.uiHeader(label: Int, back: () -> Unit): LinearLayout = LinearLayout(this).apply {
@@ -184,7 +225,7 @@ internal fun Context.uiHeader(label: Int, back: () -> Unit): LinearLayout = Line
 }
 
 internal fun Context.uiPair(first: View, second: View): LinearLayout = LinearLayout(this).apply {
-    if (resources.configuration.fontScale >= 1.35f || resources.configuration.screenWidthDp in 1..319) {
+    if (context.uiStackControls()) {
         orientation = LinearLayout.VERTICAL
         uiAdd(first)
         uiAdd(second, 8)

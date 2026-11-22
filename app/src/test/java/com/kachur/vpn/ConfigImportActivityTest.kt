@@ -178,7 +178,7 @@ class ConfigImportActivityTest {
             try {
                 VpnConnection.publish(VpnPhase.WAITING, R.string.vpn_waiting_handshake)
                 assertEquals(activity.getString(R.string.vpn_waiting_handshake), text(activity, R.id.connection_status))
-                assertEquals(activity.getString(R.string.vpn_disconnect), connect.text.toString())
+                assertTrue(connect.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
                 assertEquals(diagnostics, text(activity, R.id.import_diagnostics))
 
                 controller.recreate()
@@ -642,7 +642,7 @@ class ConfigImportActivityTest {
                 assertEquals(VpnPhase.RECOVERING, VpnConnection.phase)
                 val button = activity.findViewById<Button>(R.id.connect_vpn_button)
                 assertTrue(button.isEnabled)
-                assertEquals(activity.getString(R.string.vpn_disconnect), button.text.toString())
+                assertTrue(button.contentDescription.contains(activity.getString(R.string.vpn_disconnect)))
                 button.performClick()
                 assertEquals(1, stopped)
                 assertFalse(recovery.recovering)
@@ -666,7 +666,7 @@ class ConfigImportActivityTest {
         val context = RuntimeEnvironment.getApplication()
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
-            activity.findViewById<Button>(R.id.ui_open_settings).performClick()
+            activity.findViewById<View>(R.id.ui_open_settings).performClick()
             val toggle = activity.findViewById<Switch>(R.id.vpn_auto_recovery)
             assertTrue(toggle.isChecked)
             toggle.performClick()
@@ -674,7 +674,7 @@ class ConfigImportActivityTest {
         }
         Robolectric.buildActivity(MainActivity::class.java).setup().use { controller ->
             val activity = controller.get()
-            activity.findViewById<Button>(R.id.ui_open_settings).performClick()
+            activity.findViewById<View>(R.id.ui_open_settings).performClick()
             assertFalse(activity.findViewById<Switch>(R.id.vpn_auto_recovery).isChecked)
             assertTrue(VpnLaunchSettings(context).enabled)
         }

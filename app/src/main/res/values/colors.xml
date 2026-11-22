@@ -1,6 +1,7 @@
 <resources>
-    <color name="ui_background">#F1F4FD</color>
+    <color name="ui_background">#F2F4FD</color>
     <color name="ui_surface">#FFFFFF</color>
+    <color name="ui_surface_high">#E9EDFF</color>
     <color name="ui_border">#CED7EF</color>
     <color name="ui_text">#121C36</color>
     <color name="ui_muted">#465574</color>
@@ -9,8 +10,10 @@
     <color name="ui_primary_start">#5334B8</color>
     <color name="ui_primary_end">#214EA1</color>
     <color name="ui_on_primary">#FFFFFF</color>
-    <color name="ui_hero_start">#E8E9FF</color>
-    <color name="ui_hero_end">#DDEEFF</color>
+    <color name="ui_map_center">#9BB0EA</color>
+    <color name="ui_map_mid">#CBD5F7</color>
+    <color name="ui_map_edge">#ECF0FC</color>
+    <color name="ui_horizon">#4676CE</color>
     <color name="ui_good">#075A42</color>
     <color name="ui_good_surface">#CFEBE1</color>
     <color name="ui_error">#9C253E</color>

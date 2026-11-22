@@ -7,6 +7,8 @@ import android.app.NotificationManager
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.drawable.RippleDrawable
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
@@ -16,7 +18,10 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.text.InputFilter
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.format.Formatter
+import android.text.style.RelativeSizeSpan
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
@@ -42,24 +47,34 @@ class MainActivity : KachurActivity() {
     private lateinit var session: ImportSession
     private lateinit var profileName: TextView
     private lateinit var activeProfile: TextView
+    private lateinit var serverCard: View
+    private lateinit var serverCountry: TextView
+    private lateinit var serverBadge: ImageView
     private lateinit var profileCountry: Button
+    private lateinit var profileSettings: View
     private lateinit var autoConnect: Switch
     private lateinit var autoRecovery: Switch
     private lateinit var notificationAccess: Button
     private lateinit var diagnostics: TextView
     private lateinit var feedback: TextView
+    private lateinit var importPanel: View
     private lateinit var importButton: Button
     private lateinit var connectButton: Button
+    private var powerHalo: View? = null
+    private var powerTone: PowerTone? = null
     private lateinit var reconnectButton: Button
+    private lateinit var protectionCard: View
+    private lateinit var protectionTitle: TextView
+    private lateinit var protectionHint: TextView
+    private lateinit var protectionBadge: ImageView
     private lateinit var connectionStatus: TextView
     private lateinit var connectionDiagnostics: TextView
     private lateinit var received: TextView
     private lateinit var sent: TextView
+    private lateinit var duration: TextView
     private lateinit var home: ScrollView
     private lateinit var settingsPage: ScrollView
-    private lateinit var navigation: LinearLayout
     private var detailsOpen = false
-    private var statusColor = 0
     private val backFromSettings = object : OnBackPressedCallback(false) {
         override fun handleOnBackPressed() = showSettings(false)
     }
@@ -145,7 +160,6 @@ class MainActivity : KachurActivity() {
         }
 
         buildInterface(savedInstanceState)
-
 
         session.onChange = {
             render()
@@ -246,46 +260,18 @@ class MainActivity : KachurActivity() {
 
     private fun buildInterface(savedState: Bundle?) {
         detailsOpen = savedState?.getBoolean("connection_details_open") == true
-        val homeContent = buildHome()
-        val stackedNavigation = resources.configuration.fontScale >= 1.35f ||
-            resources.configuration.screenWidthDp in 1..319
         settingsPage = uiScroll(buildSettings()).apply {
             id = R.id.ui_settings_page
             ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.ui_settings))
         }
-        navigation = LinearLayout(this).apply {
-            orientation = if (stackedNavigation) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = uiShape(R.color.ui_surface, 24, R.color.ui_border)
-            addNavigation(R.string.ui_servers, R.drawable.ic_ui_servers, R.id.profiles_open) {
-                if (!session.busy && permissionRequest == null) {
-                    openProfiles.launch(Intent(this@MainActivity, ProfilesActivity::class.java))
-                }
-            }
-            addNavigation(R.string.ui_diagnostics, R.drawable.ic_ui_chart, R.id.diag_open_screen) {
-                startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
-            }
-            addNavigation(R.string.ui_settings, R.drawable.ic_ui_settings, R.id.ui_open_settings) { showSettings(true) }
-        }
-        if (stackedNavigation) homeContent.uiAdd(navigation, 14)
-        home = uiScroll(homeContent).apply {
+        home = uiScroll(buildHome()).apply {
             id = R.id.ui_home_scroll
             ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.app_name))
         }
-        val pages = FrameLayout(this).apply {
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(getColor(R.color.ui_background))
             addView(home, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(settingsPage, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
-        }
-        val root = uiColumn().apply {
-            setBackgroundColor(getColor(R.color.ui_background))
-            addView(pages, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-            if (!stackedNavigation) {
-                addView(navigation, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-                    marginStart = dp(12)
-                    marginEnd = dp(12)
-                    bottomMargin = dp(8)
-                })
-            }
             uiInsets()
         }
         setContentView(root)
@@ -293,51 +279,37 @@ class MainActivity : KachurActivity() {
         showSettings(savedState?.getBoolean("settings_open") == true)
     }
 
-    private fun buildHome(): LinearLayout = uiColumn(18).apply {
+    private fun buildHome(): LinearLayout = uiColumn(16).apply {
         uiAdd(LinearLayout(this@MainActivity).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(ImageView(this@MainActivity).apply {
-                setImageResource(R.mipmap.ic_launcher)
+                setImageResource(R.drawable.ic_vpn_launcher_foreground)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LinearLayout.LayoutParams(dp(56), dp(56)))
-            addView(uiHeading(R.string.app_name, 29), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
-                marginStart = dp(12)
-            })
+            }, LinearLayout.LayoutParams(dp(58), dp(54)))
+            addView(uiHeading(R.string.app_name, 26), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(uiIconButton(R.string.ui_settings, R.drawable.ic_ui_settings, quiet = true).apply {
+                id = R.id.ui_open_settings
+                setOnClickListener { showSettings(true) }
+            }, LinearLayout.LayoutParams(dp(48), dp(48)))
         })
-        uiAdd(uiColumn(20).apply {
-            background = uiGradient(R.color.ui_hero_start, R.color.ui_hero_end, 28)
-            gravity = Gravity.CENTER_HORIZONTAL
-            connectionStatus = uiLabel(22, bold = true).apply {
-                id = R.id.connection_status
-                gravity = Gravity.CENTER
-                setPaddingRelative(dp(14), dp(7), dp(14), dp(7))
-                accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
-            }
-            addView(connectionStatus, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
-            connectButton = uiButton(R.string.connect_vpn, primary = true, icon = R.drawable.ic_ui_power).apply {
-                id = R.id.connect_vpn_button
-                minHeight = dp(76)
-                textSize = 19f
-                setOnClickListener { toggleVpn() }
-            }
-            uiAdd(connectButton, 20)
-        }, 16)
-        uiAdd(uiCard().apply {
-            uiAdd(uiCaption(R.string.ui_selected_server))
-            profileName = uiLabel(22, bold = true).apply { id = R.id.profile_name }
-            uiAdd(profileName, 3)
-            activeProfile = uiLabel(15, R.color.ui_muted)
-            uiAdd(activeProfile)
-            profileCountry = uiButton(0).apply {
-                id = R.id.vpn_profile_country
-                setOnClickListener { editCountry() }
-            }
-            uiAdd(profileCountry, 8)
-            importButton = uiButton(R.string.import_profile).apply {
+        uiAdd(buildPowerControl(), 4)
+        uiAdd(buildServerCard(), 4)
+        uiAdd(buildTraffic(), 14)
+        uiAdd(buildNavigation(), 18)
+        val details = buildConnectionDetails()
+        uiAdd(buildProtectionCard(details), 18)
+        uiAdd(details, 8)
+        reconnectButton = uiButton(R.string.split_apply_reconnect).apply {
+            id = R.id.main_split_reconnect_button
+            setOnClickListener { VpnConnection.reconnectWithSavedExclusions(applicationContext) }
+        }
+        uiAdd(reconnectButton, 14)
+        importPanel = uiCard().apply {
+            importButton = uiButton(R.string.import_profile, icon = R.drawable.ic_ui_import).apply {
                 id = R.id.import_profile_button
                 setOnClickListener { selectConfig() }
             }
-            uiAdd(importButton, 8)
+            uiAdd(importButton)
             feedback = uiLabel(16).apply {
                 id = R.id.import_feedback
                 accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -345,51 +317,149 @@ class MainActivity : KachurActivity() {
             uiAdd(feedback, 8)
             diagnostics = uiLabel(14, R.color.ui_muted).apply { id = R.id.import_diagnostics }
             uiAdd(diagnostics, 6)
-        }, 14)
-        uiAdd(uiHeading(R.string.ui_traffic, 19), 18)
-        received = uiLabel(20, bold = true).apply { id = R.id.ui_traffic_received }
-        sent = uiLabel(20, bold = true).apply { id = R.id.ui_traffic_sent }
-        uiAdd(uiPair(trafficTile(R.string.ui_received, received), trafficTile(R.string.ui_sent, sent)), 8)
-        reconnectButton = uiButton(R.string.split_apply_reconnect).apply {
-            id = R.id.main_split_reconnect_button
-            setOnClickListener { VpnConnection.reconnectWithSavedExclusions(applicationContext) }
         }
-        uiAdd(reconnectButton, 14)
-        val details = uiCard().apply {
-            visibility = if (detailsOpen) View.VISIBLE else View.GONE
-            connectionDiagnostics = uiLabel(14).apply {
-                id = R.id.connection_diagnostics
-                setTextIsSelectable(true)
+        uiAdd(importPanel, 14)
+    }
+
+    private fun buildPowerControl(): View {
+        connectButton = uiButton(0, primary = true).apply {
+            id = R.id.connect_vpn_button
+            minHeight = dp(72)
+            textSize = 21f
+            includeFontPadding = false
+            compoundDrawablePadding = dp(10)
+            setPaddingRelative(dp(12), dp(12), dp(12), dp(12))
+            setOnClickListener { toggleVpn() }
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        if (uiStackControls()) return connectButton
+        return FrameLayout(this).apply {
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ui_world_map)
+                scaleType = ImageView.ScaleType.FIT_XY
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, FrameLayout.LayoutParams(MATCH_PARENT, dp(214), Gravity.TOP))
+            val halo = FrameLayout(this@MainActivity).apply {
+                addView(connectButton, FrameLayout.LayoutParams(dp(192), dp(192), Gravity.CENTER))
             }
-            uiAdd(connectionDiagnostics)
-            uiAdd(uiButton(R.string.vpn_reset_connection).apply {
-                id = R.id.reset_vpn_button
-                setOnClickListener {
-                    permissionRequest?.let(::clearPermissionRequest)
-                    pendingProfileConnection = null
-                    permissionMessage = null
-                    launchSettings.setPaused(true)
-                    VpnConnection.reset()
-                    renderConnection()
-                }
-            }, 8)
+            powerHalo = halo
+            addView(halo, FrameLayout.LayoutParams(dp(250), dp(250), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+                topMargin = dp(26)
+            })
         }
-        uiAdd(uiButton(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details).apply {
-            id = R.id.ui_connection_details
+    }
+
+    private fun buildServerCard(): View = uiActionRow().apply {
+        id = R.id.ui_server_card
+        serverCard = this
+        serverBadge = ImageView(this@MainActivity).apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        addView(serverBadge, LinearLayout.LayoutParams(dp(48), dp(38)))
+        val title = uiColumn().apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            serverCountry = uiLabel(20, bold = true)
+            profileName = uiLabel(14, R.color.ui_muted).apply { id = R.id.profile_name }
+            activeProfile = uiLabel(15, R.color.ui_muted)
+            uiAdd(serverCountry)
+            uiAdd(profileName, 1)
+            uiAdd(activeProfile)
+        }
+        addView(title, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            marginStart = dp(14)
+            marginEnd = dp(8)
+        })
+        addView(uiDecorativeIcon(R.drawable.ic_ui_chevron), LinearLayout.LayoutParams(dp(20), dp(20)))
+        setOnClickListener { showProfiles() }
+    }
+
+    private fun buildTraffic(): View = LinearLayout(this).apply {
+        orientation = if (uiStackControls()) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        received = uiLabel(15, bold = true).apply { id = R.id.ui_traffic_received }
+        sent = uiLabel(15, bold = true).apply { id = R.id.ui_traffic_sent }
+        duration = uiLabel(15, bold = true).apply { id = R.id.ui_session_time }
+        for ((index, tile) in listOf(
+            trafficTile(R.string.ui_received, received, R.drawable.ic_ui_receive, R.color.ui_good),
+            trafficTile(R.string.ui_sent, sent, R.drawable.ic_ui_send, R.color.ui_accent),
+            trafficTile(R.string.ui_session_time, duration, R.drawable.ic_ui_clock, R.color.ui_accent),
+        ).withIndex()) {
+            val gap = if (index == 0) 0 else 8
+            if (orientation == LinearLayout.VERTICAL) {
+                uiAdd(tile, gap)
+            } else {
+                addView(tile, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f).apply { marginStart = dp(gap) })
+            }
+        }
+    }
+
+    private fun buildNavigation(): View = LinearLayout(this).apply {
+        orientation = if (uiStackControls()) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+        setPadding(dp(5), dp(5), dp(5), dp(5))
+        background = uiShape(R.color.ui_surface, 22, R.color.ui_border)
+        addNavigation(R.string.ui_home_vpn, R.drawable.ic_ui_home, R.id.ui_home_tab, selected = true) {
+            home.scrollTo(0, 0)
+        }
+        addNavigation(R.string.ui_diagnostics, R.drawable.ic_ui_chart, R.id.diag_open_screen) {
+            startActivity(Intent(this@MainActivity, DiagnosticsActivity::class.java))
+        }
+        addNavigation(R.string.ui_servers, R.drawable.ic_ui_servers, R.id.profiles_open) { showProfiles() }
+    }
+
+    private fun buildProtectionCard(details: View): View = uiActionRow().apply {
+        id = R.id.ui_connection_details
+        protectionCard = this
+        protectionBadge = uiDecorativeIcon(R.drawable.ic_ui_shield)
+        addView(protectionBadge, LinearLayout.LayoutParams(dp(34), dp(34)).apply { marginStart = dp(4) })
+        addView(uiColumn().apply {
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            protectionTitle = uiLabel(17, bold = true).apply { id = R.id.ui_protection_title }
+            protectionHint = uiLabel(14, R.color.ui_muted)
+            connectionStatus = uiLabel(14, R.color.ui_muted).apply { id = R.id.connection_status }
+            uiAdd(protectionTitle)
+            uiAdd(protectionHint, 2)
+            uiAdd(connectionStatus, 2)
+        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
+            marginStart = dp(16)
+            marginEnd = dp(8)
+        })
+        val chevron = uiDecorativeIcon(R.drawable.ic_ui_chevron).apply {
+            rotation = if (detailsOpen) 90f else 0f
+        }
+        addView(chevron, LinearLayout.LayoutParams(dp(20), dp(20)))
+        ViewCompat.setStateDescription(this, getString(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details))
+        setOnClickListener {
+            detailsOpen = !detailsOpen
+            details.visibility = if (detailsOpen) View.VISIBLE else View.GONE
+            chevron.rotation = if (detailsOpen) 90f else 0f
+            ViewCompat.setStateDescription(this, getString(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details))
+        }
+    }
+
+    private fun buildConnectionDetails(): View = uiCard().apply {
+        visibility = if (detailsOpen) View.VISIBLE else View.GONE
+        connectionDiagnostics = uiLabel(14).apply {
+            id = R.id.connection_diagnostics
+            setTextIsSelectable(true)
+        }
+        uiAdd(connectionDiagnostics)
+        uiAdd(uiButton(R.string.vpn_reset_connection).apply {
+            id = R.id.reset_vpn_button
             setOnClickListener {
-                detailsOpen = !detailsOpen
-                details.visibility = if (detailsOpen) View.VISIBLE else View.GONE
-                setText(if (detailsOpen) R.string.ui_hide_details else R.string.ui_details)
+                permissionRequest?.let(::clearPermissionRequest)
+                pendingProfileConnection = null
+                permissionMessage = null
+                launchSettings.setPaused(true)
+                VpnConnection.reset()
+                renderConnection()
             }
-        }, 14)
-        uiAdd(details, 8)
+        }, 8)
     }
 
     private fun buildSettings(): View = uiColumn(18).apply {
         uiAdd(uiHeader(R.string.ui_settings) { showSettings(false) })
         uiAdd(uiCard().apply {
             uiAdd(uiHeading(R.string.ui_appearance))
-            uiAdd(uiButton(0).apply {
+            uiAdd(uiSettingsLink(0, R.drawable.ic_ui_palette).apply {
                 id = R.id.ui_theme_choice
                 text = getString(R.string.ui_theme_value, getString(AppAppearance.read(context).label))
                 setOnClickListener { chooseTheme() }
@@ -432,17 +502,26 @@ class MainActivity : KachurActivity() {
             }
             uiAdd(notificationAccess, 8)
         }, 14)
+        profileSettings = uiCard().apply {
+            uiAdd(uiHeading(R.string.ui_selected_server))
+            profileCountry = uiSettingsLink(0, R.drawable.ic_ui_servers).apply {
+                id = R.id.vpn_profile_country
+                setOnClickListener { editCountry() }
+            }
+            uiAdd(profileCountry, 10)
+        }
+        uiAdd(profileSettings, 14)
         uiAdd(uiCard().apply {
             uiAdd(uiHeading(R.string.ui_routing_and_backup))
-            uiAdd(uiButton(R.string.split_title).apply {
+            uiAdd(uiSettingsLink(R.string.split_title, R.drawable.ic_ui_routes).apply {
                 id = R.id.split_open_button
                 setOnClickListener { startActivity(Intent(this@MainActivity, SplitTunnelingActivity::class.java)) }
             }, 10)
-            uiAdd(uiButton(R.string.ip_title).apply {
+            uiAdd(uiSettingsLink(R.string.ip_title, R.drawable.ic_ui_shield).apply {
                 id = R.id.ui_open_ip_routes
                 setOnClickListener { startActivity(Intent(this@MainActivity, IpRoutesActivity::class.java)) }
             }, 8)
-            uiAdd(uiButton(R.string.backup_title).apply {
+            uiAdd(uiSettingsLink(R.string.backup_title, R.drawable.ic_ui_backup).apply {
                 id = R.id.backup_open_screen
                 setOnClickListener { startActivity(Intent(this@MainActivity, BackupActivity::class.java)) }
             }, 8)
@@ -466,46 +545,67 @@ class MainActivity : KachurActivity() {
     private fun showSettings(open: Boolean) {
         home.visibility = if (open) View.GONE else View.VISIBLE
         settingsPage.visibility = if (open) View.VISIBLE else View.GONE
-        navigation.visibility = if (open) View.GONE else View.VISIBLE
         backFromSettings.isEnabled = open
     }
 
-    private fun LinearLayout.addNavigation(label: Int, glyph: Int, viewId: Int, open: () -> Unit) {
-        if (orientation == LinearLayout.VERTICAL) {
-            val gap = if (childCount == 0) 0 else 8
-            uiAdd(uiButton(label, icon = glyph).apply {
-                id = viewId
-                setOnClickListener { open() }
-            }, gap)
-            return
+    private fun showProfiles() {
+        if (!session.busy && permissionRequest == null) {
+            openProfiles.launch(Intent(this, ProfilesActivity::class.java))
         }
-        addView(uiButton(label).apply {
-            id = viewId
-            textSize = 13f
-            minHeight = dp(58)
-            setPaddingRelative(dp(2), dp(7), dp(2), dp(7))
-            compoundDrawablePadding = dp(4)
-            setCompoundDrawablesRelativeWithIntrinsicBounds(null, uiGlyph(glyph), null, null)
-            setOnClickListener { open() }
-        }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f).apply {
-            marginStart = dp(3)
-            marginEnd = dp(3)
-        })
     }
 
-    private fun trafficTile(label: Int, amount: TextView): View = uiCard(13).apply {
-        uiAdd(uiCaption(label))
-        uiAdd(amount, 4)
+    private fun LinearLayout.addNavigation(
+        label: Int, glyph: Int, viewId: Int, selected: Boolean = false, open: () -> Unit,
+    ) {
+        val stacked = orientation == LinearLayout.VERTICAL
+        val tab = uiButton(label, primary = selected).apply {
+            id = viewId
+            isSelected = selected
+            textSize = if (stacked) 16f else 13f
+            minHeight = dp(if (stacked) 48 else 62)
+            setPaddingRelative(dp(6), dp(7), dp(6), dp(7))
+            compoundDrawablePadding = dp(6)
+            val icon = uiGlyph(glyph, if (selected) R.color.ui_on_primary else R.color.ui_accent)
+            if (stacked) setCompoundDrawablesRelativeWithIntrinsicBounds(icon, null, null, null)
+            else setCompoundDrawablesRelativeWithIntrinsicBounds(null, icon, null, null)
+            if (!selected) {
+                background = RippleDrawable(ColorStateList.valueOf(getColor(R.color.ui_ripple)),
+                    null, uiShape(android.R.color.white, 16))
+                setTextColor(getColor(R.color.ui_text))
+            }
+            setOnClickListener { open() }
+        }
+        if (stacked) uiAdd(tab, if (childCount == 0) 0 else 4)
+        else addView(tab, LinearLayout.LayoutParams(0, MATCH_PARENT, 1f))
+    }
+
+    private fun trafficTile(label: Int, amount: TextView, glyph: Int, tint: Int): View = uiCard(9).apply {
+        background = uiPanel(14)
+        minimumHeight = dp(62)
+        gravity = Gravity.CENTER
+        ViewCompat.setScreenReaderFocusable(this, true)
+        uiAdd(LinearLayout(this@MainActivity).apply {
+            gravity = Gravity.CENTER
+            addView(uiDecorativeIcon(glyph, tint), LinearLayout.LayoutParams(dp(16), dp(16)).apply { marginEnd = dp(5) })
+            addView(amount, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+        })
+        uiAdd(uiLabel(13, R.color.ui_muted).apply {
+            setText(label)
+            gravity = Gravity.CENTER
+        }, 3)
     }
 
     private fun renderTraffic() {
-        val traffic = VpnTrafficUi.latest.takeIf { VpnConnection.phase == VpnPhase.HANDSHAKE }
-        val receiveText = traffic?.let { Formatter.formatShortFileSize(this, it.received) }
-            ?: getString(R.string.ui_traffic_unavailable)
-        val sendText = traffic?.let { Formatter.formatShortFileSize(this, it.sent) }
-            ?: getString(R.string.ui_traffic_unavailable)
+        val reading = VpnTrafficUi.latest.takeIf { VpnConnection.phase == VpnPhase.HANDSHAKE }
+        val missing = getString(R.string.ui_traffic_unavailable)
+        val receiveText = reading?.traffic?.let { Formatter.formatShortFileSize(this, it.received) } ?: missing
+        val sendText = reading?.traffic?.let { Formatter.formatShortFileSize(this, it.sent) } ?: missing
+        val durationText = reading?.elapsedSeconds?.let {
+            getString(R.string.ui_session_duration, it / 3600, it / 60 % 60, it % 60)
+        } ?: missing
         if (received.text != receiveText) received.text = receiveText
         if (sent.text != sendText) sent.text = sendText
+        if (duration.text != durationText) duration.text = durationText
     }
 
     private fun selectConfig() {
@@ -523,9 +623,12 @@ class MainActivity : KachurActivity() {
 
     private fun render() {
         val profile = session.profile
+        val country = profile?.let { labels.country(it.documentKey) }
         profileName.text = profile?.name ?: getString(R.string.no_profile)
-        profileCountry.visibility = if (profile == null) View.GONE else View.VISIBLE
-        if (profile != null) profileCountry.text = getString(R.string.vpn_country_label, labels.country(profile.documentKey))
+        serverCountry.text = country ?: getString(R.string.ui_selected_server)
+        serverBadge.showServerBadge(country)
+        profileSettings.visibility = if (profile == null) View.GONE else View.VISIBLE
+        if (country != null) profileCountry.text = getString(R.string.vpn_country_label, country)
         diagnostics.text = session.stages.joinToString("\n") { getString(it) }
         diagnostics.visibility = if (session.stages.isEmpty()) View.GONE else View.VISIBLE
         val message = session.feedback
@@ -536,6 +639,7 @@ class MainActivity : KachurActivity() {
             else -> getString(message)
         }
         feedback.visibility = if (feedback.text.isEmpty()) View.GONE else View.VISIBLE
+        importPanel.visibility = if (profile == null || session.busy || message != null) View.VISIBLE else View.GONE
         renderConnection()
     }
 
@@ -557,6 +661,9 @@ class MainActivity : KachurActivity() {
         } else null
         activeProfile.visibility = if (tunnelName == null) View.GONE else View.VISIBLE
         if (tunnelName != null) activeProfile.text = getString(R.string.profiles_active_tunnel, tunnelName)
+        serverCard.contentDescription = listOfNotNull(serverCountry.text, profileName.text,
+            activeProfile.text.takeIf { tunnelName != null }).joinToString(". ")
+        serverCard.isEnabled = !session.busy && permissionRequest == null
         autoConnect.isChecked = launchSettings.enabled
         autoConnect.setText(if (launchSettings.enabled && launchSettings.paused) R.string.vpn_auto_paused else R.string.vpn_auto_connect)
         autoRecovery.isChecked = launchSettings.recoveryEnabled
@@ -570,27 +677,10 @@ class MainActivity : KachurActivity() {
         } else {
             View.GONE
         }
-        connectButton.setText(when (phase) {
-            VpnPhase.STARTING -> R.string.vpn_cancel_start
-            VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> R.string.vpn_disconnect
-            else -> R.string.connect_vpn
-        })
-        connectionStatus.setText(if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message)
-        val color = when {
-            VpnConnection.currentError != null -> R.color.ui_error
-            phase == VpnPhase.HANDSHAKE -> R.color.ui_good
-            else -> R.color.ui_accent
-        }
-        if (statusColor != color) {
-            statusColor = color
-            connectionStatus.setTextColor(getColor(color))
-            val surface = when (color) {
-                R.color.ui_good -> R.color.ui_good_surface
-                R.color.ui_error -> R.color.ui_error_surface
-                else -> R.color.ui_accent_soft
-            }
-            connectionStatus.background = uiShape(surface, 20)
-        }
+        val error = VpnConnection.currentError != null ||
+            (phase == VpnPhase.IDLE && permissionMessage != null && VpnConnection.lastError?.category == permissionMessage)
+        renderPower(phase, blocked, error)
+        renderProtection(phase, error)
         renderTraffic()
         connectionDiagnostics.text = getString(
             R.string.vpn_diagnostic_summary,
@@ -603,6 +693,83 @@ class MainActivity : KachurActivity() {
             getString(VpnConnection.serviceResponse),
             VpnConnection.lastError?.display(this) ?: getString(R.string.vpn_no_error),
         )
+    }
+
+    private fun renderPower(phase: VpnPhase, blocked: Int?, error: Boolean) {
+        val state = when {
+            error -> R.string.vpn_notice_error
+            permissionRequest != null || phase == VpnPhase.STARTING -> R.string.vpn_notice_connecting
+            phase == VpnPhase.WAITING -> R.string.ui_power_waiting
+            phase == VpnPhase.HANDSHAKE -> R.string.vpn_notice_connected
+            phase == VpnPhase.RECOVERING -> R.string.ui_power_recovering
+            phase == VpnPhase.STOPPING -> R.string.vpn_phase_stopping
+            else -> R.string.vpn_disconnected
+        }
+        val action = getString(blocked ?: when (phase) {
+            VpnPhase.STARTING -> R.string.vpn_cancel_start
+            VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> R.string.vpn_disconnect
+            else -> R.string.connect_vpn
+        })
+        val label = getString(state)
+        val showAction = phase == VpnPhase.IDLE && blocked == null || uiStackControls() && blocked == null
+        val text = if (showAction) "$label\n$action" else label
+        if (connectButton.text.toString() != text) {
+            connectButton.text = SpannableString(text).apply {
+                if (showAction) setSpan(RelativeSizeSpan(0.72f), label.length + 1, length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        val description = getString(R.string.ui_power_accessible, label, action)
+        if (connectButton.contentDescription != description) connectButton.contentDescription = description
+        val tone = when {
+            error -> PowerTone.ERROR
+            phase == VpnPhase.HANDSHAKE -> PowerTone.ACTIVE
+            else -> PowerTone.READY
+        }
+        if (powerTone == tone) return
+        powerTone = tone
+        val compact = powerHalo == null
+        connectButton.setTextColor(tone.ink)
+        connectButton.background = powerDisc(tone, compact)
+        val glyph = checkNotNull(getDrawable(R.drawable.ic_ui_power)).mutate().apply {
+            setTint(tone.ink)
+            val size = dp(if (compact) 30 else 48)
+            setBounds(0, 0, size, size)
+        }
+        connectButton.setCompoundDrawablesRelative(null, glyph, null, null)
+        powerHalo?.background = PowerHaloDrawable(tone, getColor(R.color.ui_horizon))
+    }
+
+    private fun renderProtection(phase: VpnPhase, error: Boolean) {
+        val protected = phase == VpnPhase.HANDSHAKE && !error
+        val status = if (phase == VpnPhase.IDLE) permissionMessage ?: VpnConnection.message else VpnConnection.message
+        val title = when {
+            protected -> R.string.ui_protection_active
+            error -> R.string.vpn_notice_error
+            phase == VpnPhase.IDLE && permissionRequest == null -> R.string.ui_protection_inactive
+            else -> R.string.ui_protection_progress
+        }
+        val hint = when {
+            protected -> R.string.ui_protection_summary
+            status == R.string.vpn_disconnected -> R.string.ui_protection_hint
+            else -> null
+        }
+        protectionTitle.setText(title)
+        connectionStatus.setText(status)
+        connectionStatus.visibility = if (hint == null) View.VISIBLE else View.GONE
+        protectionHint.visibility = if (hint != null) View.VISIBLE else View.GONE
+        if (hint != null) protectionHint.setText(hint)
+        protectionCard.contentDescription = getString(R.string.ui_power_accessible, getString(title), getString(hint ?: status))
+        if (protectionBadge.tag != title) {
+            protectionBadge.tag = title
+            protectionBadge.setImageDrawable(uiGlyph(
+                if (protected) R.drawable.ic_ui_protected else R.drawable.ic_ui_shield,
+                when {
+                    protected -> R.color.ui_good
+                    error -> R.color.ui_error
+                    else -> R.color.ui_accent
+                },
+            ))
+        }
     }
 
     private fun editCountry() {

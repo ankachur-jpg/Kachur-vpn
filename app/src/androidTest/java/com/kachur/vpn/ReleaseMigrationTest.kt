@@ -115,7 +115,7 @@ class ReleaseMigrationTest {
         val catalog = context.localProfiles().read().catalog
         assertEquals(listOf(PRIMARY_NAME, SELECTED_NAME), catalog.entries.map { it.name })
         assertEquals(SELECTED_ID, catalog.selectedId)
-        assertTrue(catalog.selected?.config?.interfaceSection?.containsKey("PrivateKey") == true)
+        assertTrue(!catalog.selected?.config?.interfaceSection?.get("PrivateKey").isNullOrEmpty())
         assertEquals(COUNTRY, VpnProfileLabels(context).country(SELECTED_ID))
         val routing = SplitTunnelingSettings(context)
         assertEquals(setOf(EXCLUDED_APP), routing.excludedPackages())

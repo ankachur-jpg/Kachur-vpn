@@ -2,7 +2,7 @@
 
 No privileged command is run at import/startup. The user must explicitly press
 Connect/Disconnect, at which point polkit authenticates awg-quick. No shell=True.
-Profiles are managed by the OS under /etc/amneziawg, not by this prototype.
+The prototype reserves kch0 and never controls other VPN interfaces.
 """
 from __future__ import annotations
 
@@ -121,6 +121,11 @@ def read_state(name: str) -> VPNState:
 def switch_tunnel(name: str, connect: bool) -> None:
     """Require explicit polkit authorization; never execute arbitrary paths."""
     name = check_interface(name)
+    if name != "kch0":
+        raise VPNError(
+            "Для безопасности прототип управляет только отдельным интерфейсом kch0. "
+            "Существующие интерфейсы AmneziaVPN, включая amn0, не трогаем."
+        )
     quick = _tool("awg-quick")
     userspace = _tool("amneziawg-go")
     pkexec = _tool("pkexec")

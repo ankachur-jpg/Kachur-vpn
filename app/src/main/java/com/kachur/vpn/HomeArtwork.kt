@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.RadialGradient
@@ -68,11 +69,14 @@ internal class PowerHaloDrawable(private val tone: PowerTone, private val horizo
         val y = bounds.exactCenterY()
         val orbitRadius = radius * 0.88f
         orbit.set(x - orbitRadius, y - orbitRadius, x + orbitRadius, y + orbitRadius)
+        val skyCenter = y - radius * 0.34f
         atmosphere = RadialGradient(
-            x, y - radius * 0.48f, radius * 0.99f,
+            x, skyCenter, radius,
             intArrayOf(ColorUtils.setAlphaComponent(horizon, 174), ColorUtils.setAlphaComponent(horizon, 54), Color.TRANSPARENT),
             floatArrayOf(0f, 0.48f, 1f), Shader.TileMode.CLAMP,
-        )
+        ).apply {
+            setLocalMatrix(Matrix().apply { setScale(1f, 0.66f, x, skyCenter) })
+        }
         glow = RadialGradient(
             x, y, radius,
             intArrayOf(Color.TRANSPARENT, ColorUtils.setAlphaComponent(tone.rim, 120), Color.TRANSPARENT),

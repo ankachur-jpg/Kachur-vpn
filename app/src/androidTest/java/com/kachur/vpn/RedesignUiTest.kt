@@ -1,8 +1,10 @@
 package com.kachur.vpn
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
+import android.app.UiAutomation
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -12,10 +14,12 @@ import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -166,51 +170,79 @@ class RedesignUiTest {
     }
 
     @Test
-    fun accessibilityTreeExposesActionsAndCanNavigateTheHomeScreen() {
+    @RequiresApi(Build.VERSION_CODES.Q)
+    fun talkBackFocusAndAccessibilityActionsNavigateTheHomeScreen() {
         setFontScale("1.0")
         seedPreview()
-        val automation = instrumentation.uiAutomation
+        val automation = instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
         val service = automation.serviceInfo
         val originalFlags = service.flags
+        val manager = checkNotNull(context.getSystemService(AccessibilityManager::class.java))
+        val talkBack = checkNotNull(manager.installedAccessibilityServiceList.firstOrNull {
+            it.resolveInfo.serviceInfo.packageName == "com.google.android.marvin.talkback" &&
+                it.resolveInfo.serviceInfo.name.endsWith(".TalkBackService")
+        }) { "TalkBack is required for the screen reader test" }
+        val resolver = context.contentResolver
+        val servicesKey = Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        val enabledKey = Settings.Secure.ACCESSIBILITY_ENABLED
+        val previousServices = Settings.Secure.getString(resolver, servicesKey)
+        val previousEnabled = Settings.Secure.getString(resolver, enabledKey)
+        val enabledServices = (previousServices.orEmpty().split(':').filter(String::isNotBlank) + talkBack.id)
+            .distinct().joinToString(":")
         service.flags = originalFlags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         automation.serviceInfo = service
+        automation.adoptShellPermissionIdentity(Manifest.permission.WRITE_SECURE_SETTINGS)
         try {
+            assertTrue(Settings.Secure.putString(resolver, servicesKey, enabledServices))
+            assertTrue(Settings.Secure.putInt(resolver, enabledKey, 1))
+            waitFor {
+                manager.isTouchExplorationEnabled &&
+                    manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN).any { it.id == talkBack.id }
+            }
+            // Give a fresh emulator time to finish opening the system TalkBack walkthrough before launching Kachur VPN.
+            automation.waitForIdle(700, 8_000)
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 awaitProfile(scenario)
-                val power = accessibleNode(R.id.connect_vpn_button)
+                val power = accessibleNode(automation, R.id.connect_vpn_button)
                 assertEquals(Button::class.java.name, power.className.toString())
                 assertTrue(power.contentDescription.contains(context.getString(R.string.connect_vpn)))
-                assertTrue(power.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
-                waitFor { accessibleNode(R.id.connect_vpn_button).isAccessibilityFocused }
+                assertTrue(power.isAccessibilityFocused || power.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
+                waitFor { accessibleNode(automation, R.id.connect_vpn_button).isAccessibilityFocused }
 
-                val server = accessibleNode(R.id.ui_server_card)
+                val server = accessibleNode(automation, R.id.ui_server_card)
                 assertEquals(Button::class.java.name, server.className.toString())
                 assertTrue(server.contentDescription.contains(PREVIEW_PROFILE))
                 assertTrue(server.performAction(AccessibilityNodeInfo.ACTION_CLICK))
-                assertTrue(accessibleNode(R.id.profiles_import).isClickable)
+                assertTrue(accessibleNode(automation, R.id.profiles_import).isClickable)
                 assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
 
-                assertTrue(accessibleNode(R.id.ui_open_settings).performAction(AccessibilityNodeInfo.ACTION_CLICK))
-                assertTrue(accessibleNode(R.id.ui_theme_choice).isClickable)
+                assertTrue(accessibleNode(automation, R.id.ui_open_settings).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                assertTrue(accessibleNode(automation, R.id.ui_theme_choice).isClickable)
                 assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
 
-                val homeTab = accessibleNode(R.id.ui_home_tab)
+                val homeTab = accessibleNode(automation, R.id.ui_home_tab)
                 assertTrue(homeTab.isSelected)
-                assertTrue(accessibleNode(R.id.diag_open_screen).performAction(AccessibilityNodeInfo.ACTION_CLICK))
-                assertTrue(accessibleNode(R.id.diag_run).isClickable)
+                assertTrue(accessibleNode(automation, R.id.diag_open_screen).performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                assertTrue(accessibleNode(automation, R.id.diag_run).isClickable)
                 assertTrue(automation.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK))
             }
         } finally {
-            service.flags = originalFlags
-            automation.serviceInfo = service
+            try {
+                Settings.Secure.putString(resolver, servicesKey, previousServices)
+                Settings.Secure.putString(resolver, enabledKey, previousEnabled)
+            } finally {
+                automation.dropShellPermissionIdentity()
+                service.flags = originalFlags
+                automation.serviceInfo = service
+            }
         }
     }
 
-    private fun accessibleNode(id: Int): AccessibilityNodeInfo {
+    private fun accessibleNode(automation: UiAutomation, id: Int): AccessibilityNodeInfo {
         val name = context.resources.getResourceName(id)
         var node: AccessibilityNodeInfo? = null
         waitFor {
-            node = instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(name)
+            node = automation.rootInActiveWindow?.findAccessibilityNodeInfosByViewId(name)
                 ?.firstOrNull { it.isVisibleToUser }
             node != null
         }

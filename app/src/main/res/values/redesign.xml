@@ -20,6 +20,7 @@
     <string name="ui_profile_action">%1$s · %2$s</string>
     <string name="ui_ping_legend">Максимум %1$s\nФиолетовый — напрямую. Бирюзовый — через VPN.</string>
     <item type="id" name="ui_open_settings" />
+    <item type="id" name="ui_home_scroll" />
     <item type="id" name="ui_settings_page" />
     <item type="id" name="ui_theme_choice" />
     <item type="id" name="ui_open_ip_routes" />

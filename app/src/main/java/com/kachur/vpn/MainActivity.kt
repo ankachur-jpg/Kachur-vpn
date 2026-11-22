@@ -246,13 +246,15 @@ class MainActivity : KachurActivity() {
 
     private fun buildInterface(savedState: Bundle?) {
         detailsOpen = savedState?.getBoolean("connection_details_open") == true
-        home = uiScroll(buildHome()).apply { ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.app_name)) }
+        val homeContent = buildHome()
+        val stackedNavigation = resources.configuration.fontScale >= 1.35f ||
+            resources.configuration.screenWidthDp in 1..319
         settingsPage = uiScroll(buildSettings()).apply {
             id = R.id.ui_settings_page
             ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.ui_settings))
         }
         navigation = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
+            orientation = if (stackedNavigation) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
             setPadding(dp(12), dp(8), dp(12), dp(8))
             background = uiShape(R.color.ui_surface, 24, R.color.ui_border)
             addNavigation(R.string.ui_servers, R.drawable.ic_ui_servers, R.id.profiles_open) {
@@ -265,6 +267,11 @@ class MainActivity : KachurActivity() {
             }
             addNavigation(R.string.ui_settings, R.drawable.ic_ui_settings, R.id.ui_open_settings) { showSettings(true) }
         }
+        if (stackedNavigation) homeContent.uiAdd(navigation, 14)
+        home = uiScroll(homeContent).apply {
+            id = R.id.ui_home_scroll
+            ViewCompat.setAccessibilityPaneTitle(this, getString(R.string.app_name))
+        }
         val pages = FrameLayout(this).apply {
             addView(home, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
             addView(settingsPage, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -272,11 +279,13 @@ class MainActivity : KachurActivity() {
         val root = uiColumn().apply {
             setBackgroundColor(getColor(R.color.ui_background))
             addView(pages, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
-            addView(navigation, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
-                marginStart = dp(12)
-                marginEnd = dp(12)
-                bottomMargin = dp(8)
-            })
+            if (!stackedNavigation) {
+                addView(navigation, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT).apply {
+                    marginStart = dp(12)
+                    marginEnd = dp(12)
+                    bottomMargin = dp(8)
+                })
+            }
             uiInsets()
         }
         setContentView(root)
@@ -284,7 +293,7 @@ class MainActivity : KachurActivity() {
         showSettings(savedState?.getBoolean("settings_open") == true)
     }
 
-    private fun buildHome(): View = uiColumn(18).apply {
+    private fun buildHome(): LinearLayout = uiColumn(18).apply {
         uiAdd(LinearLayout(this@MainActivity).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(ImageView(this@MainActivity).apply {
@@ -462,6 +471,14 @@ class MainActivity : KachurActivity() {
     }
 
     private fun LinearLayout.addNavigation(label: Int, glyph: Int, viewId: Int, open: () -> Unit) {
+        if (orientation == LinearLayout.VERTICAL) {
+            val gap = if (childCount == 0) 0 else 8
+            uiAdd(uiButton(label, icon = glyph).apply {
+                id = viewId
+                setOnClickListener { open() }
+            }, gap)
+            return
+        }
         addView(uiButton(label).apply {
             id = viewId
             textSize = 13f

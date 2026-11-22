@@ -4,10 +4,12 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.os.ParcelFileDescriptor
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
 import androidx.test.core.app.ActivityScenario
@@ -20,6 +22,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.util.Base64
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 @RunWith(AndroidJUnit4::class)
 class RedesignUiTest {
@@ -28,6 +33,7 @@ class RedesignUiTest {
 
     @Test
     fun themesNavigationAndScreenshots() {
+        setFontScale("1.0")
         seedPreview()
         try {
             AppAppearance.DARK.save(context)
@@ -40,13 +46,13 @@ class RedesignUiTest {
                     assertEquals(activity.getString(R.string.ui_traffic_unavailable),
                         activity.findViewById<TextView>(R.id.ui_traffic_received).text.toString())
                 }
-                capture("01-home-dark")
+                capture("01-home-dark", scenario)
                 scenario.onActivity { activity ->
                     activity.findViewById<Button>(R.id.ui_open_settings).performClick()
                     assertTrue(activity.findViewById<View>(R.id.ui_settings_page).isShown)
                     assertTrue(activity.findViewById<Button>(R.id.ui_theme_choice).isShown)
                 }
-                capture("07-settings")
+                capture("07-settings", scenario)
                 scenario.onActivity { activity ->
                     activity.onBackPressedDispatcher.onBackPressed()
                     assertTrue(activity.findViewById<Button>(R.id.connect_vpn_button).isShown)
@@ -65,8 +71,10 @@ class RedesignUiTest {
                     val content = activity.findViewById<View>(android.R.id.content)
                     val bitmap = Bitmap.createBitmap(content.width, content.height, Bitmap.Config.ARGB_8888)
                     val canvas = Canvas(bitmap)
-                    canvas.drawColor(activity.getColor(R.color.ui_background))
+                    val background = activity.getColor(R.color.ui_background)
+                    canvas.drawColor(background)
                     content.draw(canvas)
+                    assertTrue(hasVisibleContent(bitmap, background))
                     save("06-backups", bitmap)
                 }
             }
@@ -78,7 +86,7 @@ class RedesignUiTest {
                     checkPrimaryAction(activity)
                     assertContrast(activity)
                 }
-                capture("02-home-light")
+                capture("02-home-light", scenario)
             }
         } finally {
             AppAppearance.SYSTEM.save(context)
@@ -104,7 +112,17 @@ class RedesignUiTest {
                     val layout = checkNotNull(action.layout)
                     for (line in 0 until layout.lineCount) assertEquals(0, layout.getEllipsisCount(line))
                 }
-                capture("08-large-text")
+                capture("08-large-text", scenario)
+                scenario.onActivity { activity ->
+                    val scroll = activity.findViewById<ScrollView>(R.id.ui_home_scroll)
+                    scroll.scrollTo(0, scroll.getChildAt(0).height)
+                    for (id in listOf(R.id.profiles_open, R.id.diag_open_screen, R.id.ui_open_settings)) {
+                        val action = activity.findViewById<Button>(id)
+                        assertTrue(action.getGlobalVisibleRect(android.graphics.Rect()))
+                        assertEquals(1, action.layout.lineCount)
+                        assertEquals(0, action.layout.getEllipsisCount(0))
+                    }
+                }
             }
         } finally {
             setFontScale("1.0")
@@ -161,13 +179,48 @@ class RedesignUiTest {
                 scenario.onActivity { visible = it.findViewById<View>(viewId)?.let(ready) == true }
                 visible
             }
-            capture(name)
+            capture(name, scenario)
         }
     }
 
-    private fun capture(name: String) {
-        instrumentation.waitForIdleSync()
-        save(name, checkNotNull(instrumentation.uiAutomation.takeScreenshot()))
+    private fun <T : Activity> capture(name: String, scenario: ActivityScenario<T>) {
+        waitFor {
+            var focused = false
+            scenario.onActivity { focused = it.hasWindowFocus() }
+            focused
+        }
+        val frame = CountDownLatch(1)
+        var background = 0
+        scenario.onActivity { activity ->
+            background = activity.getColor(R.color.ui_background)
+            val decor = activity.window.decorView
+            decor.viewTreeObserver.registerFrameCommitCallback { frame.countDown() }
+            decor.invalidate()
+        }
+        assertTrue("No committed frame for $name", frame.await(5, TimeUnit.SECONDS))
+        waitFor {
+            val bitmap = instrumentation.uiAutomation.takeScreenshot() ?: return@waitFor false
+            val pixels = if (bitmap.config == Bitmap.Config.HARDWARE) {
+                checkNotNull(bitmap.copy(Bitmap.Config.ARGB_8888, false))
+            } else bitmap
+            val ready = hasVisibleContent(pixels, background)
+            if (pixels !== bitmap) pixels.recycle()
+            if (ready) save(name, bitmap) else bitmap.recycle()
+            ready
+        }
+    }
+
+    private fun hasVisibleContent(bitmap: Bitmap, background: Int): Boolean {
+        val margin = bitmap.getPixel(bitmap.width / 50, bitmap.height / 3)
+        if (abs(Color.red(margin) - Color.red(background)) > 2 ||
+            abs(Color.green(margin) - Color.green(background)) > 2 ||
+            abs(Color.blue(margin) - Color.blue(background)) > 2
+        ) return false
+        val colors = mutableSetOf<Int>()
+        for (row in 2..17) for (column in 1..15) {
+            colors.add(bitmap.getPixel(bitmap.width * column / 16, bitmap.height * row / 20))
+        }
+        return colors.size >= 5
     }
 
     private fun save(name: String, bitmap: Bitmap) {

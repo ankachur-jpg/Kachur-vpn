@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -92,19 +93,29 @@ def _run(args: list[str], timeout: int = 8) -> subprocess.CompletedProcess[str]:
 
 
 def read_state(name: str) -> VPNState:
+    """Read device state without privileges; handshake is best-effort.
+
+    The tunnel device existing does NOT prove a completed handshake.
+    Device byte counters are readable from sysfs even without CAP_NET_ADMIN.
+    """
     name = check_interface(name)
-    awg = _tool("awg")
-    interfaces = _run([awg, "show", "interfaces"])
-    if interfaces.returncode:
-        raise VPNError("Не удалось прочитать состояние AmneziaWG.")
-    if name not in interfaces.stdout.split():
+    device = Path("/sys/class/net") / name
+    if not device.is_dir():
         return VPNState(active=False)
-    transfer = _run([awg, "show", name, "transfer"])
-    handshakes = _run([awg, "show", name, "latest-handshakes"])
-    if transfer.returncode or handshakes.returncode:
-        raise VPNError("Интерфейс включён, но статистика недоступна.")
-    rx, tx = parse_transfer(transfer.stdout)
-    return VPNState(True, rx, tx, parse_handshakes(handshakes.stdout))
+
+    def counter(field: str) -> int:
+        try:
+            return max(0, int((device / "statistics" / field).read_text().strip()))
+        except (OSError, ValueError):
+            return 0
+
+    handshake = 0
+    awg = shutil.which("awg")
+    if awg:
+        result = _run([awg, "show", name, "latest-handshakes"])
+        if result.returncode == 0:
+            handshake = parse_handshakes(result.stdout)
+    return VPNState(True, counter("rx_bytes"), counter("tx_bytes"), handshake)
 
 
 def switch_tunnel(name: str, connect: bool) -> None:

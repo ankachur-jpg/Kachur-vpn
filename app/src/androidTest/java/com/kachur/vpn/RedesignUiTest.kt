@@ -5,12 +5,20 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.drawable.AdaptiveIconDrawable
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.annotation.RequiresApi
 import androidx.core.graphics.ColorUtils
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -43,6 +51,7 @@ class RedesignUiTest {
                     assertFalse(activity.resources.getBoolean(R.bool.ui_light_bars))
                     checkPrimaryAction(activity)
                     assertContrast(activity)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) captureIconPreview(activity, "09-icon-dark")
                     assertEquals(activity.getString(R.string.ui_traffic_unavailable),
                         activity.findViewById<TextView>(R.id.ui_traffic_received).text.toString())
                 }
@@ -85,6 +94,7 @@ class RedesignUiTest {
                     assertTrue(activity.resources.getBoolean(R.bool.ui_light_bars))
                     checkPrimaryAction(activity)
                     assertContrast(activity)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) captureIconPreview(activity, "10-icon-light")
                 }
                 capture("02-home-light", scenario)
             }
@@ -168,6 +178,83 @@ class RedesignUiTest {
         )) {
             assertTrue(ColorUtils.calculateContrast(activity.getColor(foreground), activity.getColor(background)) >= 4.5)
         }
+    }
+
+    private fun launcherIcon(activity: Activity): AdaptiveIconDrawable =
+        checkNotNull(activity.getDrawable(R.mipmap.ic_launcher) as? AdaptiveIconDrawable)
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun captureIconPreview(activity: Activity, name: String) {
+        assertSmallIconColors(launcherIcon(activity))
+        assertTrue("Missing launcher monochrome layer", launcherIcon(activity).monochrome != null)
+        val preview = activity.uiColumn(20).apply {
+            setBackgroundColor(activity.getColor(R.color.ui_background))
+            uiAdd(activity.uiLabel(25, bold = true).apply { text = "Значок приложения" })
+            uiAdd(activity.uiCard().apply {
+                uiAdd(activity.uiLabel(17, bold = true).apply { text = "Цветной" })
+                uiAdd(iconSamples(activity) { launcherIcon(activity) }, 10)
+            }, 14)
+            uiAdd(activity.uiCard().apply {
+                uiAdd(activity.uiLabel(17, bold = true).apply { text = "Монохромный" })
+                uiAdd(iconSamples(activity) {
+                    val layer = checkNotNull(launcherIcon(activity).monochrome).mutate()
+                    layer.setTint(activity.getColor(R.color.ui_accent))
+                    AdaptiveIconDrawable(ColorDrawable(activity.getColor(R.color.ui_accent_soft)), layer)
+                }, 10)
+            }, 14)
+        }
+        val width = activity.dp(380)
+        preview.measure(
+            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+        )
+        preview.layout(0, 0, width, preview.measuredHeight)
+        val bitmap = Bitmap.createBitmap(width, preview.measuredHeight, Bitmap.Config.ARGB_8888)
+        preview.draw(Canvas(bitmap))
+        save(name, bitmap)
+    }
+
+    private fun iconSamples(activity: Activity, newIcon: () -> Drawable): LinearLayout =
+        LinearLayout(activity).apply {
+            gravity = Gravity.BOTTOM
+            for (size in listOf(24, 32, 48, 64)) {
+                val tile = activity.uiColumn().apply {
+                    gravity = Gravity.CENTER_HORIZONTAL
+                    val icon = ImageView(activity).apply { setImageDrawable(newIcon()) }
+                    addView(icon, LinearLayout.LayoutParams(activity.dp(size), activity.dp(size)))
+                    uiAdd(activity.uiLabel(12, R.color.ui_muted).apply {
+                        text = "$size dp"
+                        gravity = Gravity.CENTER
+                    }, 4)
+                }
+                addView(tile, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            }
+        }
+
+    private fun assertSmallIconColors(icon: Drawable) {
+        val size = 24
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        icon.setBounds(0, 0, size, size)
+        icon.draw(Canvas(bitmap))
+        var black = 0
+        var tan = 0
+        var blue = 0
+        for (y in 0 until size) for (x in 0 until size) {
+            val color = bitmap.getPixel(x, y)
+            if (Color.alpha(color) < 224) continue
+            val r = Color.red(color)
+            val g = Color.green(color)
+            val b = Color.blue(color)
+            when {
+                maxOf(r, g, b) < 65 -> black++
+                r > 150 && r > g + 25 && g > b + 10 -> tan++
+                b > 120 && b > r + 25 && b > g + 15 -> blue++
+            }
+        }
+        bitmap.recycle()
+        assertTrue("Black silhouette at 24 px", black >= 8)
+        assertTrue("Tan markings at 24 px", tan >= 8)
+        assertTrue("Blue-violet shield at 24 px", blue >= 8)
     }
 
     private fun <T : Activity> screenshot(

@@ -1,8 +1,9 @@
 """Minimal AmneziaWG system integration for the first Fedora prototype.
 
 No privileged command is run at import/startup. The user must explicitly press
-Connect/Disconnect, at which point polkit authenticates awg-quick. No shell=True.
-The prototype reserves kch0 and never controls other VPN interfaces.
+Connect/Disconnect, at which point polkit authenticates awg-quick. Handshake
+inspection is a separate, explicit read-only action; periodic refreshes never
+request administrator privileges. No shell=True is used.
 """
 from __future__ import annotations
 
@@ -92,11 +93,13 @@ def _run(args: list[str], timeout: int = 8) -> subprocess.CompletedProcess[str]:
         raise VPNError("Не удалось связаться с системным VPN-движком.") from exc
 
 
-def read_state(name: str) -> VPNState:
-    """Read device state without privileges; handshake is best-effort.
+def read_state(name: str, check_handshake: bool = False) -> VPNState:
+    """Read interface counters without privileges.
 
-    The tunnel device existing does NOT prove a completed handshake.
-    Device byte counters are readable from sysfs even without CAP_NET_ADMIN.
+    The tunnel device existing does NOT prove a completed handshake. Reading
+    AmneziaWG's latest-handshake timestamp requires access to its privileged
+    control socket, so it is queried only after an explicit user action via
+    pkexec. Periodic UI refreshes never trigger an authentication prompt.
     """
     name = check_interface(name)
     device = Path("/sys/class/net") / name
@@ -110,11 +113,16 @@ def read_state(name: str) -> VPNState:
             return 0
 
     handshake = 0
-    awg = shutil.which("awg")
-    if awg:
-        result = _run([awg, "show", name, "latest-handshakes"])
-        if result.returncode == 0:
-            handshake = parse_handshakes(result.stdout)
+    if check_handshake:
+        awg = _tool("awg")
+        pkexec = _tool("pkexec")
+        result = _run([pkexec, awg, "show", name, "latest-handshakes"], timeout=25)
+        if result.returncode:
+            raise VPNError(
+                "Не удалось проверить handshake. Возможно, запрос прав администратора "
+                "был отменён."
+            )
+        handshake = parse_handshakes(result.stdout)
     return VPNState(True, counter("rx_bytes"), counter("tx_bytes"), handshake)
 
 

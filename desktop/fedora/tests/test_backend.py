@@ -7,7 +7,7 @@ from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kachur_fedora.backend import (
-    VPNError, check_interface, parse_handshakes, parse_transfer,
+    VPNError, check_interface, import_profile, parse_handshakes, parse_transfer,
     pretty_bytes, read_state, switch_tunnel,
 )
 
@@ -84,6 +84,33 @@ class BackendTests(unittest.TestCase):
         run.return_value = Mock(returncode=126, stdout="", stderr="")
         with self.assertRaisesRegex(VPNError, "запрос прав администратора"):
             read_state("kch0", check_handshake=True)
+
+    @patch("kachur_fedora.backend._run")
+    @patch("kachur_fedora.backend._tool", return_value="/usr/bin/pkexec")
+    @patch("kachur_fedora.backend.Path.is_file", return_value=True)
+    @patch(
+        "kachur_fedora.backend.Path.stat",
+        return_value=Mock(st_mode=0o100755),
+    )
+    def test_import_profile_uses_fixed_polkit_helper(
+        self, stat_result, is_file, tool, run
+    ):
+        run.return_value = Mock(returncode=0)
+        import_profile("/tmp/example.conf")
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/pkexec",
+                "/usr/local/libexec/kachur-vpn-helper",
+                "import-profile",
+                "/tmp/example.conf",
+            ],
+        )
+
+    @patch("kachur_fedora.backend.Path.is_file", return_value=False)
+    def test_import_profile_requires_installed_root_helper(self, is_file):
+        with self.assertRaisesRegex(VPNError, "Помощник безопасного импорта"):
+            import_profile("/tmp/example.conf")
 
     @patch("kachur_fedora.backend._tool", side_effect=lambda s: "/usr/bin/" + s)
     @patch("kachur_fedora.backend._run")

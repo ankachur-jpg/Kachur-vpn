@@ -182,11 +182,13 @@ class MainWindow(Adw.ApplicationWindow):
         assert state is not None
         self.current_state = state
         self.status.set_text(("Подключено • handshake подтверждён" if state.last_handshake else "Туннель запущен • handshake не проверен") if state.active else "VPN выключен")
-        if state.active:
+        if state.active and state.last_handshake:
             self.status.add_css_class("kachur-connected")
-            self.power.add_css_class("kachur-button-connected")
         else:
             self.status.remove_css_class("kachur-connected")
+        if state.active:
+            self.power.add_css_class("kachur-button-connected")
+        else:
             self.power.remove_css_class("kachur-button-connected")
         self.power.set_label("⏻  Отключить VPN" if state.active else "⏻  Включить VPN")
         self.rx.set_text(pretty_bytes(state.received))

@@ -14,6 +14,7 @@ from kachur_fedora.backend import (
 
 class BackendTests(unittest.TestCase):
     def test_interface_name(self):
+        self.assertEqual(check_interface(" kch0 "), "kch0")
         self.assertEqual(check_interface(" amn0 "), "amn0")
         for value in ("", "../x", "a/b", "x" * 16, "-bad", "hi;id", "abc def"):
             with self.subTest(value=value):
@@ -35,12 +36,20 @@ class BackendTests(unittest.TestCase):
     @patch("kachur_fedora.backend._run")
     def test_does_not_start_without_user_click(self, run, tool):
         run.return_value = Mock(returncode=0)
-        switch_tunnel("amn0", True)
+        switch_tunnel("kch0", True)
         self.assertEqual(run.call_args.args[0], [
             "/usr/bin/pkexec", "/usr/bin/env",
             "WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/bin/amneziawg-go",
-            "/usr/bin/awg-quick", "up", "amn0"
+            "/usr/bin/awg-quick", "up", "kch0"
         ])
+
+    @patch("kachur_fedora.backend._tool")
+    @patch("kachur_fedora.backend._run")
+    def test_existing_amnezia_interface_is_never_managed(self, run, tool):
+        with self.assertRaises(VPNError):
+            switch_tunnel("amn0", False)
+        run.assert_not_called()
+        tool.assert_not_called()
 
     def test_shell_injection_blocked(self):
         with self.assertRaises(VPNError):

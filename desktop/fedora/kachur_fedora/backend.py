@@ -122,9 +122,15 @@ def switch_tunnel(name: str, connect: bool) -> None:
     """Require explicit polkit authorization; never execute arbitrary paths."""
     name = check_interface(name)
     quick = _tool("awg-quick")
+    userspace = _tool("amneziawg-go")
     pkexec = _tool("pkexec")
+    env = _tool("env")
     action = "up" if connect else "down"
-    result = _run([pkexec, quick, action, name], timeout=90)
+    result = _run(
+        [pkexec, env, f"WG_QUICK_USERSPACE_IMPLEMENTATION={userspace}",
+         quick, action, name],
+        timeout=90,
+    )
     if result.returncode:
         # Deliberately don't reveal awg-quick stderr (may include config details).
         raise VPNError(

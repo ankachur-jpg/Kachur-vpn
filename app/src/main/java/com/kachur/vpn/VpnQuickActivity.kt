@@ -194,8 +194,7 @@ class VpnQuickActivity : ComponentActivity() {
                     attempt = null
                     VpnConnection.currentError?.let { showError(VpnConnection.message) } ?: finish()
                 }
-                VpnConnection.serviceLaunch == R.string.vpn_service_launch_accepted ||
-                    VpnConnection.serviceResponse == R.string.vpn_service_foreground -> finish()
+                VpnConnection.serviceResponse == R.string.vpn_service_foreground -> finish()
             }
         } else if (resetGeneration != VpnConnection.resetGeneration) {
             showError(R.string.vpn_quick_interrupted)

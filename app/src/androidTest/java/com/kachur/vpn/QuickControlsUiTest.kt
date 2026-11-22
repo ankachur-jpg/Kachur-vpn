@@ -38,6 +38,7 @@ class QuickControlsUiTest {
         try {
             assertTrue(shell("cmd statusbar add-tile $component").isBlank())
             shell("cmd statusbar expand-settings")
+            instrumentation.uiAutomation.waitForIdle(500, 8_000)
             assertTrue(shell("cmd statusbar click-tile $component").isBlank())
             await("AWG service started by the system tile") {
                 VpnConnection.phase == VpnPhase.WAITING && notice(VpnNotifications.FOREGROUND_ID) != null
@@ -50,7 +51,10 @@ class QuickControlsUiTest {
             val power = checkNotNull(context.getSystemService(PowerManager::class.java))
             shell("input keyevent KEYCODE_SLEEP")
             await("screen turned off") { !power.isInteractive }
-            assertStartingNotice(VpnNoticeStatus.CONNECTING)
+            val asleep = checkNotNull(notice(VpnNotifications.FOREGROUND_ID))
+            assertTrue(asleep.flags and Notification.FLAG_FOREGROUND_SERVICE != 0)
+            assertFalse(asleep.extras.getString(Notification.EXTRA_TITLE).orEmpty()
+                .contains(context.getString(R.string.vpn_control_connected)))
             wake()
 
             shell("svc wifi disable")

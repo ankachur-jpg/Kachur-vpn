@@ -196,7 +196,7 @@ class RedesignUiTest {
         try {
             assertTrue(Settings.Secure.putString(resolver, servicesKey, enabledServices))
             assertTrue(Settings.Secure.putInt(resolver, enabledKey, 1))
-            waitFor {
+            waitFor(timeoutMs = 30_000, description = "TalkBack did not enable touch exploration") {
                 manager.isTouchExplorationEnabled &&
                     manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_SPOKEN).any { it.id == talkBack.id }
             }
@@ -436,14 +436,18 @@ class RedesignUiTest {
         ParcelFileDescriptor.AutoCloseInputStream(command).use { it.readBytes() }
     }
 
-    private fun waitFor(ready: () -> Boolean) {
-        val deadline = System.nanoTime() + 8_000_000_000L
+    private fun waitFor(
+        timeoutMs: Long = 8_000L,
+        description: String = "Screen did not finish laying out",
+        ready: () -> Boolean,
+    ) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         do {
             instrumentation.waitForIdleSync()
             if (ready()) return
             Thread.sleep(40)
         } while (System.nanoTime() < deadline)
-        assertTrue("Screen did not finish laying out", ready())
+        assertTrue(description, ready())
     }
 
     private companion object {

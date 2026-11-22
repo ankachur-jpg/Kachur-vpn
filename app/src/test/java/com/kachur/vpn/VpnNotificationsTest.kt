@@ -28,10 +28,11 @@ class VpnNotificationsTest {
         assertEquals(NotificationManager.IMPORTANCE_LOW, manager.getNotificationChannel(VpnNotifications.CHANNEL).importance)
         val connected = notifications.build(
             VpnNotice(VpnNoticeStatus.CONNECTED, "Германия", connectedAt = 1_700_000_000_000L,
-                traffic = VpnTraffic(1024L, 4096L)),
+                traffic = VpnTraffic(1024L, 4096L), profileName = "Тестовый сервер"),
             attempt = 113L,
         )
-        assertEquals(context.getString(R.string.app_name), connected.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals("Kachur VPN — Подключён", connected.extras.getString(Notification.EXTRA_TITLE))
+        assertTrue(connected.extras.getCharSequence(Notification.EXTRA_TEXT).toString().contains("Тестовый сервер"))
         assertEquals(R.drawable.ic_vpn_status, connected.smallIcon.resId)
         assertTrue(connected.flags and Notification.FLAG_ONGOING_EVENT != 0)
         assertTrue(connected.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
@@ -51,12 +52,27 @@ class VpnNotificationsTest {
         val notifications = VpnNotifications(context)
         for (state in listOf(VpnNoticeStatus.CONNECTING, VpnNoticeStatus.RECONNECTING, VpnNoticeStatus.ERROR)) {
             val notice = notifications.build(VpnNotice(state, "Германия", "Безопасная диагностика"), 44L)
-            assertTrue(notice.extras.getString(Notification.EXTRA_TEXT).orEmpty().contains(context.getString(state.label)))
+            assertTrue(notice.extras.getString(Notification.EXTRA_TITLE).orEmpty().contains(context.getString(state.label)))
             assertFalse(notice.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
             assertFalse(notice.extras.getCharSequence(Notification.EXTRA_BIG_TEXT).toString().contains("Исходящий"))
             assertEquals(state != VpnNoticeStatus.ERROR, notice.flags and Notification.FLAG_ONGOING_EVENT != 0)
             assertEquals(state == VpnNoticeStatus.ERROR, notice.actions.isNullOrEmpty())
         }
+    }
+
+    @Test
+    fun ordinaryControlUsesItsOwnChannelAndAConsentActivityWithoutStartingTheService() {
+        val notification = VpnNotifications(context).buildControl(VpnNoticeStatus.OFF)
+        assertEquals("Kachur VPN — Выключен", notification.extras.getString(Notification.EXTRA_TITLE))
+        assertEquals(VpnNotifications.CONTROL_CHANNEL, notification.channelId)
+        assertFalse(notification.flags and Notification.FLAG_ONGOING_EVENT != 0)
+        val action = notification.actions.single()
+        assertEquals("Включить VPN", action.title)
+        val pending = shadowOf(action.actionIntent)
+        assertTrue(pending.isActivity)
+        assertEquals(VpnQuickActivity::class.java.name, pending.savedIntent.component?.className)
+        assertTrue(pending.savedIntent.extras == null)
+        assertTrue(VpnNotifications(context).buildControl(VpnNoticeStatus.CONNECTING).actions.isNullOrEmpty())
     }
 
     @Test

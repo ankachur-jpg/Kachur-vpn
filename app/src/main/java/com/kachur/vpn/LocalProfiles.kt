@@ -18,10 +18,13 @@ import javax.crypto.spec.GCMParameterSpec
 open class KachurApplication : Application() {
     internal val profiles by lazy { LocalProfiles(this, ::profileKey) }
     internal val visibility = AppVisibility(this)
+    internal val controlNotification by lazy { VpnControlNotification(this) }
 
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(visibility)
+        VpnConnection.observe { controlNotification.sync() }
+        controlNotification.sync()
     }
 
     @Synchronized

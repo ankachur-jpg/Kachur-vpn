@@ -29,6 +29,7 @@ class AwgVpnService : VpnService() {
     private var attempt = 0L
     private var options: VpnStartOptions? = null
     private var country = ""
+    private var profileName: String? = null
     private var cleanupResult: Boolean? = null
     @Volatile private var generation = 0L
     @Volatile private var closing = false
@@ -43,7 +44,6 @@ class AwgVpnService : VpnService() {
     }
     private var foreground = false
     @Volatile private var notificationDismissed = false
-    private var postedError = false
     private var lastNotice: VpnNotice? = null
     private var lastNoticeRevision = VpnConnection.notificationRevision
     private var connectedAt = 0L
@@ -101,10 +101,11 @@ class AwgVpnService : VpnService() {
         VpnConnection.attachDiagnosticService(id, this)
         options = claimed
         country = claimed.country
+        profileName = claimed.profileName
         preferences.registerOnSharedPreferenceChangeListener(recoveryObserver)
         applyRecoverySetting()
         VpnConnection.observe(connectionObserver)
-        val initialNotice = VpnNotice(VpnNoticeStatus.CONNECTING, country)
+        val initialNotice = VpnNotice(VpnNoticeStatus.CONNECTING, country, profileName = profileName)
         lastNotice = initialNotice
         serviceCalls.execute {
             if (destroyed) return@execute
@@ -279,21 +280,13 @@ class AwgVpnService : VpnService() {
     private fun renderNotification() {
         val id = attempt
         if (closing || !VpnConnection.ownsAttempt(id)) return
-        val notice = when (VpnConnection.phase) {
-            VpnPhase.STARTING, VpnPhase.WAITING ->
-                VpnNotice(VpnNoticeStatus.CONNECTING, country, getString(VpnConnection.message))
-            VpnPhase.HANDSHAKE ->
-                VpnNotice(VpnNoticeStatus.CONNECTED, country, connectedAt = connectedAt, traffic = traffic)
-            VpnPhase.RECOVERING ->
-                VpnNotice(VpnNoticeStatus.RECONNECTING, country, getString(VpnConnection.message))
-            VpnPhase.STOPPING -> {
-                val error = VpnConnection.currentError ?: return
-                if (postedError) return
-                postedError = true
-                queueNotice(VpnNotice(VpnNoticeStatus.ERROR, country, error.display(this)), id)
-                return
-            }
-            VpnPhase.IDLE -> return
+        if (VpnConnection.phase == VpnPhase.IDLE) return
+        val state = VpnConnection.noticeStatus
+        val notice = if (state == VpnNoticeStatus.CONNECTED) {
+            VpnNotice(state, country, connectedAt = connectedAt, traffic = traffic, profileName = profileName)
+        } else {
+            val detail = VpnConnection.currentError?.display(this) ?: getString(VpnConnection.message)
+            VpnNotice(state, country, detail, profileName = profileName)
         }
         val revision = VpnConnection.notificationRevision
         if (!foreground || notificationDismissed || (lastNotice == notice && lastNoticeRevision == revision)) return
@@ -304,7 +297,7 @@ class AwgVpnService : VpnService() {
 
     private fun queueNotice(notice: VpnNotice, id: Long) {
         serviceCalls.execute {
-            if (notice.status != VpnNoticeStatus.ERROR && (closing || notificationDismissed)) return@execute
+            if (destroyed || notificationDismissed || (closing && notice.status != VpnNoticeStatus.STOPPING)) return@execute
             try {
                 notifications.update(notice, id)
             } catch (_: RuntimeException) {

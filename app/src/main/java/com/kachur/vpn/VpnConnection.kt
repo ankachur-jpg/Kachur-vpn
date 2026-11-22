@@ -8,6 +8,7 @@ import android.os.Looper
 import org.amnezia.awg.config.BadConfigException
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import kotlin.random.Random
 
 internal enum class VpnPhase(val label: Int) {
     IDLE(R.string.vpn_phase_idle),
@@ -61,12 +62,22 @@ internal object VpnConnection {
     // A delayed Android Binder call must leave the UI and its watchdogs responsive.
     internal val systemCalls = Executors.newFixedThreadPool(2)
     private val observers = mutableSetOf<() -> Unit>()
-    private var nextAttempt = 0L
+    // PendingIntent actions from a previous process cannot address a new attempt.
+    private var nextAttempt = Random.nextLong(Long.MAX_VALUE / 2)
     private var active: Attempt? = null
+    private var preparation: Preparation? = null
     val checkingRoutes: Boolean get() = active?.routingCheck != null
+    val attemptId: Long? get() = active?.id
     val activeProfileId: String? get() = active?.profileId
     val activeProfileName: String? get() = active?.profileName
+    val preparing: Boolean get() = preparation != null
+    val awaitingConsent: Boolean get() = preparation?.awaitingConsent == true
+    val preparationMessage: Int? get() = preparation?.message
 
+    private class Preparation(val key: String) {
+        var message = R.string.vpn_quick_preparing
+        var awaitingConsent = false
+    }
     private class RoutingCheck(val switchingProfile: Boolean, var worker: Future<*>? = null)
     private class Restart(val context: Context, val options: VpnStartOptions, val profileRevision: Long? = null)
 
@@ -88,6 +99,26 @@ internal object VpnConnection {
 
     fun removeObserver(observer: () -> Unit) {
         observers.remove(observer)
+    }
+
+    fun reservePreparation(key: String): Boolean {
+        if (preparation == null) preparation = Preparation(key)
+        return ownsPreparation(key)
+    }
+
+    fun ownsPreparation(key: String): Boolean = preparation?.key == key
+
+    fun describePreparation(key: String, message: Int, awaitingConsent: Boolean) {
+        preparation?.takeIf { it.key == key }?.let {
+            it.message = message
+            it.awaitingConsent = awaitingConsent
+        }
+    }
+
+    fun releasePreparation(key: String) {
+        if (!ownsPreparation(key)) return
+        preparation = null
+        notifyObservers()
     }
 
     fun record(event: Int, error: VpnError? = null) {
@@ -363,6 +394,7 @@ internal object VpnConnection {
         val attempt = active ?: return
         VpnLaunchSettings(attempt.context).setPaused(true)
         manualStopGeneration++
+        preparation = null
         when (phase) {
             VpnPhase.STARTING -> stopAttempt(attempt, startingCompletion)
             VpnPhase.WAITING, VpnPhase.HANDSHAKE, VpnPhase.RECOVERING -> stopAttempt(attempt, R.string.vpn_disconnected)
@@ -376,6 +408,7 @@ internal object VpnConnection {
 
     fun reset() {
         resetGeneration++
+        preparation = null
         val attempt = active
         when {
             attempt == null -> publish(VpnPhase.IDLE, R.string.vpn_reset_done)

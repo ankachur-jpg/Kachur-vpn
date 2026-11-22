@@ -32,6 +32,59 @@ class BackendTests(unittest.TestCase):
     def test_inactive(self, is_dir):
         self.assertFalse(read_state("amn0").active)
 
+    @patch("kachur_fedora.backend._tool")
+    @patch("kachur_fedora.backend._run")
+    @patch("kachur_fedora.backend.Path.read_text", side_effect=["123", "456"])
+    @patch("kachur_fedora.backend.Path.is_dir", return_value=True)
+    def test_periodic_state_read_never_requests_privileges(
+        self, is_dir, read_text, run, tool
+    ):
+        state = read_state("kch0")
+        self.assertTrue(state.active)
+        self.assertEqual((state.received, state.sent), (123, 456))
+        self.assertEqual(state.last_handshake, 0)
+        tool.assert_not_called()
+        run.assert_not_called()
+
+    @patch(
+        "kachur_fedora.backend._tool",
+        side_effect=lambda name: {
+            "awg": "/usr/local/bin/awg",
+            "pkexec": "/usr/bin/pkexec",
+        }[name],
+    )
+    @patch("kachur_fedora.backend._run")
+    @patch("kachur_fedora.backend.Path.read_text", side_effect=["123", "456"])
+    @patch("kachur_fedora.backend.Path.is_dir", return_value=True)
+    def test_explicit_handshake_check_uses_pkexec(
+        self, is_dir, read_text, run, tool
+    ):
+        run.return_value = Mock(returncode=0, stdout="peer 1730000000\n")
+        state = read_state("kch0", check_handshake=True)
+        self.assertEqual(state.last_handshake, 1730000000)
+        self.assertEqual((state.received, state.sent), (123, 456))
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/bin/pkexec", "/usr/local/bin/awg", "show", "kch0", "latest-handshakes"],
+        )
+
+    @patch(
+        "kachur_fedora.backend._tool",
+        side_effect=lambda name: {
+            "awg": "/usr/local/bin/awg",
+            "pkexec": "/usr/bin/pkexec",
+        }[name],
+    )
+    @patch("kachur_fedora.backend._run")
+    @patch("kachur_fedora.backend.Path.read_text", side_effect=["123", "456"])
+    @patch("kachur_fedora.backend.Path.is_dir", return_value=True)
+    def test_cancelled_handshake_check_is_reported(
+        self, is_dir, read_text, run, tool
+    ):
+        run.return_value = Mock(returncode=126, stdout="", stderr="")
+        with self.assertRaisesRegex(VPNError, "запрос прав администратора"):
+            read_state("kch0", check_handshake=True)
+
     @patch("kachur_fedora.backend._tool", side_effect=lambda s: "/usr/bin/" + s)
     @patch("kachur_fedora.backend._run")
     def test_does_not_start_without_user_click(self, run, tool):

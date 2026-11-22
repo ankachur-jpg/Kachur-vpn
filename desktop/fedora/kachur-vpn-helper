@@ -1,0 +1,253 @@
+#!/usr/bin/python3
+"""Narrow, root-owned helper for importing one AmneziaWG profile.
+
+Only the fixed Kachur profile is writable. Unknown directives (including
+PreUp/PostUp/PreDown/PostDown) are rejected to prevent importing root commands.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import ipaddress
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import tempfile
+
+DEST_DIR = Path("/etc/amnezia/amneziawg")
+DEST_FILE = DEST_DIR / "kch0.conf"
+BACKUP_FILE = DEST_DIR / "kch0.conf.backup"
+MAX_PROFILE_SIZE = 64 * 1024
+
+INTERFACE_KEYS = {
+    "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "FwMark",
+    "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4",
+    "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5",
+}
+PEER_KEYS = {"PublicKey", "PresharedKey", "AllowedIPs", "Endpoint", "PersistentKeepalive"}
+KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
+ENDPOINT_RE = re.compile(r"^(?:\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?):([0-9]{1,5})$")
+
+
+class ProfileError(ValueError):
+    pass
+
+
+def _csv(value: str) -> list[str]:
+    values = [part.strip() for part in value.split(",")]
+    if not values or any(not part for part in values):
+        raise ProfileError("Пустое значение в списке параметров.")
+    return values
+
+
+def _validate_key(value: str, field: str) -> None:
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ProfileError(f"Некорректный ключ {field}.") from exc
+    if len(decoded) != 32:
+        raise ProfileError(f"Некорректная длина ключа {field}.")
+
+
+def _integer(value: str, field: str, minimum: int, maximum: int) -> int:
+    if not value.isdecimal():
+        raise ProfileError(f"Параметр {field} должен быть целым числом.")
+    number = int(value)
+    if not minimum <= number <= maximum:
+        raise ProfileError(f"Параметр {field} вне допустимого диапазона.")
+    return number
+
+
+def validate_profile(data: bytes) -> str:
+    if not data or len(data) > MAX_PROFILE_SIZE:
+        raise ProfileError("Файл пуст или превышает размер 64 КиБ.")
+    try:
+        source = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ProfileError("Конфигурация должна быть в кодировке UTF-8.") from exc
+
+    sections: list[tuple[str, dict[str, str]]] = []
+    current: dict[str, str] | None = None
+    for number, raw_line in enumerate(source.splitlines(), 1):
+        line = raw_line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            if section == "Interface":
+                if current is not None or any(name == "Interface" for name, _ in sections):
+                    raise ProfileError("В конфигурации должен быть ровно один раздел [Interface].")
+            elif section != "Peer":
+                raise ProfileError(f"Недопустимый раздел в строке {number}.")
+            current = {}
+            sections.append((section, current))
+            continue
+        if current is None or "=" not in line:
+            raise ProfileError(f"Некорректная строка конфигурации: {number}.")
+        key, value = (part.strip() for part in line.split("=", 1))
+        if not KEY_RE.fullmatch(key) or not value:
+            raise ProfileError(f"Некорректный параметр в строке {number}.")
+        section_name = sections[-1][0]
+        allowed = INTERFACE_KEYS if section_name == "Interface" else PEER_KEYS
+        if key not in allowed:
+            raise ProfileError(
+                f"Параметр {key} не поддерживается безопасным импортом. "
+                "Команды PreUp/PostUp и другие произвольные директивы запрещены."
+            )
+        if key in current:
+            raise ProfileError(f"Параметр {key} указан повторно.")
+        current[key] = value
+
+    interfaces = [values for name, values in sections if name == "Interface"]
+    peers = [values for name, values in sections if name == "Peer"]
+    if len(interfaces) != 1 or not peers:
+        raise ProfileError("Нужны один раздел [Interface] и хотя бы один [Peer].")
+    interface = interfaces[0]
+    if not {"PrivateKey", "Address"} <= interface.keys():
+        raise ProfileError("В [Interface] обязательны PrivateKey и Address.")
+    _validate_key(interface["PrivateKey"], "PrivateKey")
+    for address in _csv(interface["Address"]):
+        try:
+            ipaddress.ip_interface(address)
+        except ValueError as exc:
+            raise ProfileError("Некорректный адрес в Address.") from exc
+    if "DNS" in interface:
+        for address in _csv(interface["DNS"]):
+            try:
+                ipaddress.ip_address(address)
+            except ValueError as exc:
+                raise ProfileError("DNS должен содержать IP-адреса.") from exc
+    for key in ("MTU",):
+        if key in interface:
+            _integer(interface[key], key, 576, 9000)
+    for key in ("ListenPort",):
+        if key in interface:
+            _integer(interface[key], key, 1, 65535)
+    if "FwMark" in interface:
+        _integer(interface["FwMark"], "FwMark", 1, 4294967295)
+    for key in ("Jc", "Jmin", "Jmax"):
+        if key in interface:
+            _integer(interface[key], key, 0, 65535)
+    if "Jmin" in interface and "Jmax" in interface:
+        if int(interface["Jmin"]) > int(interface["Jmax"]):
+            raise ProfileError("Jmin не может быть больше Jmax.")
+    for key in ("S1", "S2", "S3", "S4"):
+        if key in interface:
+            _integer(interface[key], key, 0, 65535)
+    for key in ("H1", "H2", "H3", "H4"):
+        if key in interface:
+            _integer(interface[key], key, 0, 4294967295)
+    for key in ("I1", "I2", "I3", "I4", "I5"):
+        if key in interface and (
+            len(interface[key]) > 256
+            or not re.fullmatch(r"[A-Za-z0-9+/=_.,: -]+", interface[key])
+        ):
+            raise ProfileError(f"Недопустимое значение {key}.")
+
+    for peer in peers:
+        if not {"PublicKey", "AllowedIPs", "Endpoint"} <= peer.keys():
+            raise ProfileError("В каждом [Peer] обязательны PublicKey, AllowedIPs и Endpoint.")
+        _validate_key(peer["PublicKey"], "PublicKey")
+        if "PresharedKey" in peer:
+            _validate_key(peer["PresharedKey"], "PresharedKey")
+        for network in _csv(peer["AllowedIPs"]):
+            try:
+                ipaddress.ip_network(network, strict=False)
+            except ValueError as exc:
+                raise ProfileError("Некорректная сеть в AllowedIPs.") from exc
+        endpoint = peer["Endpoint"]
+        match = ENDPOINT_RE.fullmatch(endpoint)
+        if not match or not 1 <= int(match.group(1)) <= 65535:
+            raise ProfileError("Некорректный Endpoint: ожидается адрес:порт.")
+        if "PersistentKeepalive" in peer:
+            _integer(peer["PersistentKeepalive"], "PersistentKeepalive", 0, 65535)
+
+    normalized = source.strip() + "\n"
+    return normalized
+
+
+def _read_source(path: str) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise ProfileError("Не удалось открыть выбранный файл (символические ссылки запрещены).") from exc
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_PROFILE_SIZE:
+            raise ProfileError("Выберите обычный файл конфигурации размером до 64 КиБ.")
+        data = os.read(fd, MAX_PROFILE_SIZE + 1)
+    finally:
+        os.close(fd)
+    if len(data) > MAX_PROFILE_SIZE:
+        raise ProfileError("Файл превышает размер 64 КиБ.")
+    return data
+
+
+def _atomic_write(path: Path, data: bytes) -> None:
+    fd, temporary = tempfile.mkstemp(prefix=".kachur-import-", dir=str(path.parent))
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, 0, 0)
+        with os.fdopen(fd, "wb", closefd=True) as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chown(path, 0, 0)
+        os.chmod(path, 0o600)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def import_profile(source_path: str) -> None:
+    if os.geteuid() != 0:
+        raise ProfileError("Помощник должен запускаться через Polkit.")
+    data = _read_source(source_path)
+    normalized = validate_profile(data).encode("utf-8")
+    DEST_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(DEST_DIR, 0, 0)
+    os.chmod(DEST_DIR, 0o700)
+
+    if DEST_FILE.exists() or DEST_FILE.is_symlink():
+        info = DEST_FILE.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ProfileError("Текущий профиль не является обычным файлом; импорт остановлен.")
+        old_data = DEST_FILE.read_bytes()
+        if len(old_data) > MAX_PROFILE_SIZE:
+            raise ProfileError("Текущий профиль слишком велик; импорт остановлен.")
+        _atomic_write(BACKUP_FILE, old_data)
+
+    _atomic_write(DEST_FILE, normalized)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 3 or argv[1] != "import-profile":
+        print("Использование: kachur-vpn-helper import-profile ПУТЬ_К_CONF", file=sys.stderr)
+        return 2
+    try:
+        import_profile(argv[2])
+    except (ProfileError, OSError) as exc:
+        print(f"Импорт не выполнен: {exc}", file=sys.stderr)
+        return 1
+    print("Профиль Kachur VPN импортирован. Права доступа: root-only (600).")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

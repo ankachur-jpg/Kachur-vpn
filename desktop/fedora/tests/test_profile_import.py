@@ -1,11 +1,13 @@
 """Validation tests for the root-owned profile import helper."""
 import base64
 import importlib.util
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import unittest
 
 HELPER = Path(__file__).resolve().parents[1] / "kachur-vpn-helper"
-SPEC = importlib.util.spec_from_file_location("kachur_vpn_helper", HELPER)
+LOADER = SourceFileLoader("kachur_vpn_helper", str(HELPER))
+SPEC = importlib.util.spec_from_loader("kachur_vpn_helper", LOADER)
 helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(helper)
 

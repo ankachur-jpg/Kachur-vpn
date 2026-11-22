@@ -377,7 +377,6 @@ class MainWindow(Adw.ApplicationWindow):
             if state.last_handshake else
             ("Не получен" if self._handshake_checked else "Не проверен")
         )
-        self.message.set_text("")
         self.power.set_sensitive(not self.busy)
         self.handshake_button.set_sensitive(state.active and not self.busy)
         self.import_button.set_sensitive(not state.active and not self.busy)

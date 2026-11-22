@@ -12,7 +12,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .backend import (
-    VPNError, VPNState, check_interface, pretty_bytes, pretty_handshake,
+    VPNError, VPNState, check_interface, import_profile, pretty_bytes, pretty_handshake,
     read_state, switch_tunnel,
 )
 
@@ -117,6 +117,16 @@ class MainWindow(Adw.ApplicationWindow):
         ))
         body.append(profile_card)
 
+        self.import_button = Gtk.Button(label="Импортировать конфигурацию .conf")
+        self.import_button.connect("clicked", self.on_import_clicked)
+        body.append(self.import_button)
+        body.append(label(
+            "Импорт заменяет профиль kch0.conf. Предыдущая версия сохраняется "
+            "в root-only резервную копию. Команды из конфигурации не выполняются "
+            "и опасные директивы отклоняются.",
+            "kachur-subtitle",
+        ))
+
         stats = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         body.append(stats)
         self.rx = self.add_stat(stats, "Получено", "0 Б")
@@ -151,6 +161,94 @@ class MainWindow(Adw.ApplicationWindow):
         ))
         GLib.idle_add(self.refresh)
         GLib.timeout_add_seconds(8, self._tick)
+
+    def on_import_clicked(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running:
+            return
+        if self.current_state.active:
+            self.message.set_text(
+                "Сначала отключите Kachur VPN. Активный профиль заменять нельзя."
+            )
+            return
+        chooser = Gtk.FileChooserNative.new(
+            "Выберите конфигурацию AmneziaWG",
+            self,
+            Gtk.FileChooserAction.OPEN,
+            "Выбрать",
+            "Отмена",
+        )
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("Конфигурации VPN (*.conf)")
+        file_filter.add_pattern("*.conf")
+        chooser.add_filter(file_filter)
+        chooser.connect("response", self._on_file_selected)
+        chooser.show()
+
+    def _on_file_selected(self, chooser: Gtk.FileChooserNative, response: int) -> None:
+        if response != Gtk.ResponseType.ACCEPT:
+            chooser.destroy()
+            return
+        selected = chooser.get_file()
+        path = selected.get_path() if selected is not None else None
+        chooser.destroy()
+        if not path:
+            self.message.set_text("Не удалось прочитать путь выбранного файла.")
+            return
+
+        dialog = Adw.MessageDialog.new(
+            self,
+            "Импортировать конфигурацию?",
+            "Новый файл заменит текущий профиль kch0.conf. "
+            "Предыдущий профиль будет сохранён в kch0.conf.backup. "
+            "Команды и неизвестные директивы в файле будут отклонены.",
+        )
+        dialog.add_response("cancel", "Отмена")
+        dialog.add_response("import", "Импортировать")
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("import", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.connect("response", self._on_import_confirmed, path)
+        dialog.present()
+
+    def _on_import_confirmed(
+        self, dialog: Adw.MessageDialog, response: str, path: str
+    ) -> None:
+        dialog.close()
+        if response != "import":
+            return
+        if self.busy or self.current_state.active:
+            self.message.set_text(
+                "Импорт отменён: сначала отключите Kachur VPN."
+            )
+            return
+        self.busy = True
+        self.import_button.set_sensitive(False)
+        self.power.set_sensitive(False)
+        self.handshake_button.set_sensitive(False)
+        self.message.set_text(
+            "Импортируем профиль. Может появиться системный запрос Polkit."
+        )
+
+        def worker() -> None:
+            try:
+                import_profile(path)
+                error = ""
+            except VPNError as exc:
+                error = str(exc)
+            GLib.idle_add(self._import_finished, error)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _import_finished(self, error: str) -> bool:
+        self.busy = False
+        self.import_button.set_sensitive(True)
+        self.power.set_sensitive(True)
+        self.message.set_text(
+            error if error else
+            "Профиль импортирован. Он будет использован при следующем подключении."
+        )
+        self.refresh()
+        return GLib.SOURCE_REMOVE
 
     def add_stat(self, box: Gtk.Box, name: str, value: str) -> Gtk.Label:
         card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -282,6 +380,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.message.set_text("")
         self.power.set_sensitive(not self.busy)
         self.handshake_button.set_sensitive(state.active and not self.busy)
+        self.import_button.set_sensitive(not state.active and not self.busy)
         return GLib.SOURCE_REMOVE
 
     def on_toggle(self, *_args: object) -> None:

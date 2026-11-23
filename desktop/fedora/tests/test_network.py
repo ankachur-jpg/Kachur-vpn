@@ -1,4 +1,5 @@
 """Regression tests for Fedora network setup. No host networks are modified."""
+import ipaddress
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
@@ -37,17 +38,78 @@ class NetworkTests(unittest.TestCase):
                 network.check_amnezia()
             run.assert_not_called()
 
-    def test_stale_ipv6_anchor_stops_without_modifying_firewall(self):
-        outputs = ["-P OUTPUT ACCEPT", "-A OUTPUT -j amnvpn.anchors"]
-        with patch.object(network, "device", return_value=False), patch.object(
-            network, "required", side_effect=outputs,
-        ) as run:
-            with self.assertRaisesRegex(network.NetworkError, "KillSwitch"):
-                network.check_amnezia()
-            self.assertEqual([call.args[:5] for call in run.call_args_list], [
-                ("iptables", "-w", "2", "-S", "OUTPUT"),
-                ("ip6tables", "-w", "2", "-S", "OUTPUT"),
-            ])
+    def test_stale_amnezia_anchor_gets_only_scoped_kachur_exception(self):
+        def required(*args, **kwargs):
+            if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
+                return "-P OUTPUT ACCEPT\\n-A OUTPUT -j amnvpn.anchors\\n"
+            if args[:5] == ("ip6tables", "-w", "2", "-S", "OUTPUT"):
+                return "-P OUTPUT ACCEPT\\n"
+            return ""
+
+        with patch.object(network, "required", side_effect=required) as req, patch.object(
+            network, "run", return_value=SimpleNamespace(returncode=1, stdout=""),
+        ), patch.object(
+            network, "peer_endpoints",
+            return_value=[(ipaddress.ip_address("48.102.252.233"), 37649)],
+        ), patch.object(network, "route_device", return_value="wlp2s0"):
+            network.install_firewall_bypass(False)
+
+        commands = [call.args for call in req.call_args_list]
+        self.assertIn(
+            ("iptables", "-w", "2", "-A", "KACHUR_OUT", "-o", "kch0", "-j", "ACCEPT"),
+            commands,
+        )
+        self.assertIn(
+            ("iptables", "-w", "2", "-A", "KACHUR_OUT", "-o", "wlp2s0", "-d",
+             "48.102.252.233", "-p", "udp", "--dport", "37649", "-j", "ACCEPT"),
+            commands,
+        )
+        self.assertIn(
+            ("iptables", "-w", "2", "-I", "OUTPUT", "1", "-j", "KACHUR_OUT"),
+            commands,
+        )
+        self.assertFalse(any("amnvpn.anchors" in arg for call in commands for arg in call))
+
+    def test_peer_endpoints_parse_ipv4_and_ipv6(self):
+        output = (
+            "peer4 48.102.252.233:37649\\n"
+            "peer6 [2001:db8::1]:51820\\n"
+        )
+        with patch.object(network, "required", return_value=output):
+            self.assertEqual(
+                network.peer_endpoints(),
+                [
+                    (ipaddress.ip_address("48.102.252.233"), 37649),
+                    (ipaddress.ip_address("2001:db8::1"), 51820),
+                ],
+            )
+
+    def test_remove_firewall_bypass_leaves_amnezia_anchor_intact(self):
+        state = {"jump": True}
+
+        def required(*args, **kwargs):
+            if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
+                kachur = "-A OUTPUT -j KACHUR_OUT\\n" if state["jump"] else ""
+                return "-P OUTPUT ACCEPT\\n" + kachur + "-A OUTPUT -j amnvpn.anchors\\n"
+            return ""
+
+        def run(*args, **kwargs):
+            if args[:5] == ("iptables", "-w", "2", "-D", "OUTPUT"):
+                state["jump"] = False
+                return SimpleNamespace(returncode=0, stdout="")
+            if args[:5] == ("iptables", "-w", "2", "-S", "KACHUR_OUT"):
+                return SimpleNamespace(returncode=0, stdout="-N KACHUR_OUT")
+            return SimpleNamespace(returncode=1, stdout="")
+
+        with patch.object(network, "required", side_effect=required), patch.object(
+            network, "run", side_effect=run,
+        ) as run_mock:
+            network.remove_firewall_bypass()
+
+        commands = [call.args for call in run_mock.call_args_list]
+        self.assertIn(("iptables", "-w", "2", "-D", "OUTPUT", "-j", "KACHUR_OUT"), commands)
+        self.assertIn(("iptables", "-w", "2", "-S", "KACHUR_OUT"), commands)
+        self.assertFalse(any("amnvpn.anchors" in arg for call in commands for arg in call))
 
     def test_offline_test_has_systemd_deadline_and_independent_cleanup(self):
         with patch.object(network, "device", return_value=False), patch.object(
@@ -67,7 +129,9 @@ class NetworkTests(unittest.TestCase):
             marker.write_text("-4\n-6")
             with patch.object(network, "OWNED", marker), patch.object(
                 network, "device", return_value=False,
-            ), patch.object(network, "required", return_value=""), patch.object(network, "run", return_value=SimpleNamespace(stdout="")) as run:
+            ), patch.object(network, "required", return_value=""), patch.object(
+                network, "run", return_value=SimpleNamespace(stdout="")
+            ) as run, patch.object(network, "remove_firewall_bypass"):
                 network.cleanup()
                 self.assertEqual([call.args for call in run.call_args_list], [
                     ("ip", "-4", "rule", "delete", *network.RULE),
@@ -82,9 +146,10 @@ class NetworkTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             with patch.object(network, "OWNED", Path(directory) / "missing"), patch.object(
                 network, "run",
-            ) as run:
+            ) as run, patch.object(network, "remove_firewall_bypass") as firewall:
                 network.cleanup()
                 run.assert_not_called()
+                firewall.assert_called_once_with()
 
     def test_probe_refuses_to_try_https_on_wrong_route(self):
         with patch.object(network, "check_amnezia"), patch.object(network, "device", return_value=True), patch.object(

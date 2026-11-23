@@ -11,11 +11,10 @@
 sudo dnf install python3-gobject gtk4 libadwaita polkit iproute iptables-nft curl
 sudo install -Dm755 desktop/fedora/kachur-vpn-helper /usr/local/libexec/kachur-vpn-helper
 sudo install -Dm755 desktop/fedora/kachur-vpn-network.py /usr/local/libexec/kachur-vpn-network
-bash desktop/fedora/run.sh
 bash desktop/fedora/install-desktop.sh
 ```
 
-Последняя команда устанавливает пользовательский ярлык **Kachur VPN** в меню приложений GNOME. Она не меняет сетевые настройки и не требует прав администратора.
+Последняя команда устанавливает пользовательский ярлык **Kachur VPN** в меню приложений GNOME. Она не меняет сетевые настройки и не требует прав администратора. После установки откройте меню Fedora, найдите **Kachur VPN** и запустите приложение.
 
 Нужны совместимые `awg`, `awg-quick` и, для userspace-режима,
 `amneziawg-go`. На Fedora для DNS используется работающий `systemd-resolved`.

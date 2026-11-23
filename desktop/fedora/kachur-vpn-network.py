@@ -194,21 +194,27 @@ def remove_firewall_bypass():
 def install_firewall_bypass(ipv6_tunnel):
     """Allow only tunnel egress and the encrypted AWG endpoint past stale Amnezia anchors."""
     families = (("-4", "iptables"), ("-6", "ip6tables"))
-    anchored = {}
+    positions = {}
+    anchor = re.compile(r"(?:^|\s)(?:-j|-g) amnvpn\.anchors(?:\s|$)")
     for family, tool in families:
         if not shutil.which(tool, path=ENV["PATH"]):
             continue
         output = required(tool, "-w", "2", "-S", "OUTPUT",
                           message="Не удалось проверить правила OUTPUT AmneziaVPN.")
-        anchored[family] = bool(re.search(
-            r"(?:^|\s)(?:-j|-g) amnvpn\.anchors(?:\s|$)", output
-        ))
-    if not any(anchored.values()):
+        position = 1
+        for line in output.splitlines():
+            if not line.startswith("-A OUTPUT "):
+                continue
+            if anchor.search(line):
+                positions[family] = position
+                break
+            position += 1
+    if not positions:
         return
 
     endpoints = peer_endpoints()
     for family, tool in families:
-        if not anchored.get(family):
+        if family not in positions:
             continue
         rules = []
         if family == "-4" or ipv6_tunnel:
@@ -237,7 +243,7 @@ def install_firewall_bypass(ipv6_tunnel):
                          message="Не удалось добавить ограниченное исключение Kachur.")
             required(tool, "-w", "2", "-A", FIREWALL_CHAIN, "-j", "RETURN",
                      message="Не удалось завершить временную цепочку Kachur.")
-            required(tool, "-w", "2", "-I", "OUTPUT", "1", "-j", FIREWALL_CHAIN,
+            required(tool, "-w", "2", "-I", "OUTPUT", str(positions[family]), "-j", FIREWALL_CHAIN,
                      message="Не удалось включить ограниченное исключение Kachur.")
         except NetworkError:
             run(tool, "-w", "2", "-D", "OUTPUT", "-j", FIREWALL_CHAIN)

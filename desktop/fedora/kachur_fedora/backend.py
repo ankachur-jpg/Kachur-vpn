@@ -1,7 +1,7 @@
 """Minimal AmneziaWG system integration for the first Fedora prototype.
 
 No privileged command is run at import/startup. The user must explicitly press
-Connect/Disconnect, at which point polkit authenticates awg-quick. Handshake
+Connect/Disconnect, at which point Polkit authenticates a fixed helper. Handshake
 inspection and profile import are separate, explicit Polkit actions. Periodic
 refreshes never request administrator privileges. No shell=True is used.
 """
@@ -15,6 +15,7 @@ import shutil
 import subprocess
 
 _VALID_IFACE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,14}$")
+_NETWORK_HELPER = Path("/usr/local/libexec/kachur-vpn-network")
 _IMPORT_HELPER = Path("/usr/local/libexec/kachur-vpn-helper")
 
 
@@ -147,26 +148,23 @@ def import_profile(source_path: str) -> None:
         )
 
 
-def switch_tunnel(name: str, connect: bool) -> None:
-    """Require explicit polkit authorization; never execute arbitrary paths."""
-    name = check_interface(name)
-    if name != "kch0":
-        raise VPNError(
-            "Для безопасности прототип управляет только отдельным интерфейсом kch0. "
-            "Существующие интерфейсы AmneziaVPN, включая amn0, не трогаем."
-        )
-    quick = _tool("awg-quick")
-    userspace = _tool("amneziawg-go")
-    pkexec = _tool("pkexec")
-    env = _tool("env")
-    action = "up" if connect else "down"
-    result = _run(
-        [pkexec, env, f"WG_QUICK_USERSPACE_IMPLEMENTATION={userspace}",
-         quick, action, name],
-        timeout=90,
-    )
+def _network_action(action: str) -> None:
+    if not _NETWORK_HELPER.is_file():
+        raise VPNError("Установите сетевой помощник Kachur по инструкции для Fedora.")
+    result = _run([_tool("pkexec"), str(_NETWORK_HELPER), action], timeout=175)
+    if result.returncode in (126, 127):
+        raise VPNError("Запрос прав администратора отменён или недоступен.")
     if result.returncode:
         raise VPNError(
-            "Не удалось изменить состояние VPN. Проверьте системные разрешения "
-            "и профиль /etc/amnezia/amneziawg/kch0.conf."
+            result.stdout.strip() or "Сетевая операция Kachur не выполнена."
         )
+
+
+def switch_tunnel(name: str, connect: bool) -> None:
+    if check_interface(name) != "kch0":
+        raise VPNError("Kachur управляет только интерфейсом kch0.")
+    _network_action("connect" if connect else "disconnect")
+
+
+def check_connection() -> None:
+    _network_action("check")

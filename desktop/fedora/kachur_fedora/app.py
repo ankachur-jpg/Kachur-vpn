@@ -12,7 +12,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .backend import (
-    VPNError, VPNState, check_interface, import_profile, pretty_bytes, pretty_handshake,
+    VPNError, VPNState, check_connection, check_interface, import_profile, pretty_bytes, pretty_handshake,
     read_state, switch_tunnel,
 )
 
@@ -111,8 +111,7 @@ class MainWindow(Adw.ApplicationWindow):
         profile_card.append(self.profile)
         profile_card.append(label(
             "Для Kachur зарезервирован отдельный интерфейс kch0 и профиль "
-            "/etc/amnezia/amneziawg/kch0.conf. Существующий интерфейс amn0 "
-            "приложения AmneziaVPN не затрагивается.",
+            "/etc/amnezia/amneziawg/kch0.conf. Перед подключением отключите AmneziaVPN в её окне.",
             "kachur-subtitle",
         ))
         body.append(profile_card)
@@ -139,6 +138,10 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.handshake_button.connect("clicked", self.on_check_handshake)
         body.append(self.handshake_button)
+        self.connection_button = Gtk.Button(label="Проверить HTTPS и DNS")
+        self.connection_button.set_sensitive(False)
+        self.connection_button.connect("clicked", self.on_check_connection)
+        body.append(self.connection_button)
         body.append(label(
             "Автообновление счётчиков не запрашивает права администратора. "
             "Для чтения времени handshake нажмите кнопку: появится отдельный "
@@ -284,6 +287,25 @@ class MainWindow(Adw.ApplicationWindow):
 
         Thread(target=worker, daemon=True).start()
 
+    def on_check_connection(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running or not self.current_state.active:
+            return
+        self.busy = True
+        self.connection_button.set_sensitive(False)
+        self.power.set_sensitive(False)
+        self.handshake_button.set_sensitive(False)
+        self.message.set_text("Проверяем HTTPS и DNS через kch0…")
+
+        def worker() -> None:
+            try:
+                check_connection()
+                error = ""
+            except VPNError as exc:
+                error = str(exc)
+            GLib.idle_add(self._finished, error, True)
+
+        Thread(target=worker, daemon=True).start()
+
     def on_check_handshake(self, *_args: object) -> None:
         if self.busy or self._handshake_check_running:
             return
@@ -379,6 +401,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.power.set_sensitive(not self.busy)
         self.handshake_button.set_sensitive(state.active and not self.busy)
+        self.connection_button.set_sensitive(state.active and not self.busy)
         self.import_button.set_sensitive(not state.active and not self.busy)
         return GLib.SOURCE_REMOVE
 
@@ -404,15 +427,17 @@ class MainWindow(Adw.ApplicationWindow):
                 error = ""
             except VPNError as exc:
                 error = str(exc)
-            GLib.idle_add(self._finished, error)
+            GLib.idle_add(self._finished, error, connect)
 
         Thread(target=worker, daemon=True).start()
 
-    def _finished(self, error: str) -> bool:
+    def _finished(self, error: str, connect: bool) -> bool:
         self.busy = False
         self.power.set_sensitive(True)
-        if error:
-            self.message.set_text(error)
+        self.message.set_text(error or (
+            "HTTPS и DNS через Kachur проверены." if connect else
+            "Kachur отключён. При необходимости подключите AmneziaVPN."
+        ))
         self.refresh()
         return GLib.SOURCE_REMOVE
 

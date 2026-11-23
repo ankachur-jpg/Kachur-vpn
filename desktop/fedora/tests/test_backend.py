@@ -114,13 +114,12 @@ class BackendTests(unittest.TestCase):
 
     @patch("kachur_fedora.backend._tool", side_effect=lambda s: "/usr/bin/" + s)
     @patch("kachur_fedora.backend._run")
-    def test_does_not_start_without_user_click(self, run, tool):
+    @patch("kachur_fedora.backend.Path.is_file", return_value=True)
+    def test_does_not_start_without_user_click(self, is_file, run, tool):
         run.return_value = Mock(returncode=0)
         switch_tunnel("kch0", True)
         self.assertEqual(run.call_args.args[0], [
-            "/usr/bin/pkexec", "/usr/bin/env",
-            "WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/bin/amneziawg-go",
-            "/usr/bin/awg-quick", "up", "kch0"
+            "/usr/bin/pkexec", "/usr/local/libexec/kachur-vpn-network", "connect",
         ])
 
     @patch("kachur_fedora.backend._tool")

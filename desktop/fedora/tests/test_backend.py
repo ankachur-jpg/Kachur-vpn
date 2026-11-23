@@ -1,5 +1,6 @@
 """Pure-Python backend tests; no GTK, root or VPN server required."""
 import sys
+from tempfile import TemporaryDirectory
 from pathlib import Path
 import unittest
 from unittest.mock import patch, Mock
@@ -8,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kachur_fedora.backend import (
     VPNError, check_interface, import_profile, parse_handshakes, parse_transfer,
-    pretty_bytes, read_state, switch_tunnel,
+    pretty_bytes, read_state, run_offline_test, switch_tunnel,
 )
 
 
@@ -129,6 +130,52 @@ class BackendTests(unittest.TestCase):
             switch_tunnel("amn0", False)
         run.assert_not_called()
         tool.assert_not_called()
+
+    def test_offline_test_saves_success_report_with_private_permissions(self):
+        with TemporaryDirectory() as directory:
+            helper = Path(directory) / "network-helper"
+            helper.write_text("# test helper")
+            with patch("kachur_fedora.backend._NETWORK_HELPER", helper), patch(
+                "kachur_fedora.backend._tool", return_value="/usr/bin/pkexec"
+            ), patch(
+                "kachur_fedora.backend._run",
+                return_value=Mock(returncode=0, stdout="HTTPS через kch0: OK.\nОткат Kachur: OK.\n", stderr=""),
+            ) as run, patch(
+                "kachur_fedora.backend.Path.home", return_value=Path(directory)
+            ):
+                report, success, detail = run_offline_test()
+
+            self.assertTrue(success)
+            self.assertIn("Откат Kachur: OK.", detail)
+            self.assertEqual(report.parent, Path(directory))
+            self.assertEqual(report.stat().st_mode & 0o777, 0o600)
+            self.assertIn("Результат: успех", report.read_text(encoding="utf-8"))
+            self.assertEqual(
+                run.call_args.args[0],
+                ["/usr/bin/pkexec", str(helper), "offline-test"],
+            )
+
+    def test_offline_test_records_safe_refusal_without_touching_network(self):
+        with TemporaryDirectory() as directory:
+            helper = Path(directory) / "network-helper"
+            helper.write_text("# test helper")
+            with patch("kachur_fedora.backend._NETWORK_HELPER", helper), patch(
+                "kachur_fedora.backend._tool", return_value="/usr/bin/pkexec"
+            ), patch(
+                "kachur_fedora.backend._run",
+                return_value=Mock(
+                    returncode=1,
+                    stdout="Отключите AmneziaVPN в её окне, затем повторите попытку.",
+                    stderr="",
+                ),
+            ), patch(
+                "kachur_fedora.backend.Path.home", return_value=Path(directory)
+            ):
+                report, success, detail = run_offline_test()
+
+            self.assertFalse(success)
+            self.assertIn("Отключите AmneziaVPN", detail)
+            self.assertIn("Результат: ошибка", report.read_text(encoding="utf-8"))
 
     def test_shell_injection_blocked(self):
         with self.assertRaises(VPNError):

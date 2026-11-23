@@ -101,15 +101,24 @@ class NetworkTests(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout="-N KACHUR_OUT")
             return SimpleNamespace(returncode=1, stdout="")
 
-        with patch.object(network, "required", side_effect=required), patch.object(
+        with patch.object(
+            network, "required", side_effect=required,
+        ) as required_mock, patch.object(
             network, "run", side_effect=run,
         ) as run_mock:
             network.remove_firewall_bypass()
 
-        commands = [call.args for call in run_mock.call_args_list]
-        self.assertIn(("iptables", "-w", "2", "-D", "OUTPUT", "-j", "KACHUR_OUT"), commands)
-        self.assertIn(("iptables", "-w", "2", "-S", "KACHUR_OUT"), commands)
-        self.assertFalse(any("amnvpn.anchors" in arg for call in commands for arg in call))
+        required_commands = [call.args for call in required_mock.call_args_list]
+        run_commands = [call.args for call in run_mock.call_args_list]
+        self.assertIn(
+            ("iptables", "-w", "2", "-D", "OUTPUT", "-j", "KACHUR_OUT"),
+            required_commands,
+        )
+        self.assertIn(("iptables", "-w", "2", "-S", "KACHUR_OUT"), run_commands)
+        self.assertFalse(any(
+            "amnvpn.anchors" in arg
+            for call in required_commands + run_commands for arg in call
+        ))
 
     def test_offline_test_has_systemd_deadline_and_independent_cleanup(self):
         with patch.object(network, "device", return_value=False), patch.object(

@@ -22,6 +22,7 @@ TABLE = "51821"
 MARK = "0xca6d"
 PRIORITY = "10501"
 PROTOCOL = "242"
+FIREWALL_CHAIN = "KACHUR_OUT"
 TARGET = "1.1.1.1"
 PROBE_HOST = "cloudflare-dns.com"
 ENV = {"PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin", "LC_ALL": "C"}
@@ -55,16 +56,10 @@ def device(name):
 
 
 def check_amnezia():
+    # The interface check prevents simultaneous tunnels. Stale Amnezia
+    # OUTPUT anchors are handled by a narrow Kachur-owned exception chain.
     if device("amn0"):
         raise NetworkError("Отключите AmneziaVPN в её окне, затем повторите попытку.")
-    for tool in ("iptables", "ip6tables"):
-        output = required(tool, "-w", "2", "-S", "OUTPUT",
-                          message="Не удалось проверить правила OUTPUT AmneziaVPN.")
-        if re.search(r"(?:^|\s)(?:-j|-g) amnvpn\.anchors(?:\s|$)", output):
-            raise NetworkError(
-                "В OUTPUT остались правила AmneziaVPN. Проверьте KillSwitch "
-                "и штатно отключите AmneziaVPN. См. инструкцию Fedora."
-            )
 
 
 def prepare_profile(text):
@@ -132,11 +127,128 @@ def reserve(family):
         raise NetworkError("Таблица маршрутов Kachur уже используется.")
 
 
-def route_device(address, family="-4", uid=None):
-    args = ("uid", str(uid)) if uid is not None else ()
+def route_device(address, family="-4", uid=None, mark=None):
+    args = ()
+    if mark is not None:
+        args += ("mark", str(mark))
+    if uid is not None:
+        args += ("uid", str(uid))
     result = required("ip", "-j", family, "route", "get", address, *args,
                       message="Маршрут проверки недоступен.")
     return json.loads(result)[0].get("dev")
+
+
+def peer_endpoints():
+    """Return resolved peer endpoint IPs and UDP ports, never hostnames."""
+    output = required("awg", "show", IFACE, "endpoints",
+                      message="Не удалось определить адрес сервера Kachur.")
+    endpoints = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) != 2 or fields[1] in {"(none)", "none"}:
+            continue
+        value = fields[1]
+        if value.startswith("["):
+            closing = value.find("]")
+            if closing < 0 or value[closing + 1:closing + 2] != ":":
+                raise NetworkError("Некорректный адрес сервера Kachur.")
+            host, port_text = value[1:closing], value[closing + 2:]
+        else:
+            host, separator, port_text = value.rpartition(":")
+            if not separator:
+                raise NetworkError("Некорректный адрес сервера Kachur.")
+        try:
+            address = ipaddress.ip_address(host)
+            port = int(port_text)
+        except ValueError as exc:
+            raise NetworkError("Сервер Kachur должен иметь доступный IP-адрес и UDP-порт.") from exc
+        if not 1 <= port <= 65535:
+            raise NetworkError("Некорректный UDP-порт сервера Kachur.")
+        endpoints.append((address, port))
+    if not endpoints:
+        raise NetworkError("Движок AmneziaWG не сообщил адрес сервера Kachur.")
+    return endpoints
+
+
+def remove_firewall_bypass():
+    """Remove only the temporary KACHUR_OUT chains; leave Amnezia rules intact."""
+    for tool in ("iptables", "ip6tables"):
+        if not shutil.which(tool, path=ENV["PATH"]):
+            continue
+        output = required(tool, "-w", "2", "-S", "OUTPUT",
+                          message="Не удалось проверить временные правила Kachur.")
+        jump = re.compile(rf"^-A OUTPUT -j {re.escape(FIREWALL_CHAIN)}$", re.MULTILINE)
+        while jump.search(output):
+            required(tool, "-w", "2", "-D", "OUTPUT", "-j", FIREWALL_CHAIN,
+                     message="Не удалось удалить переход временных правил Kachur.")
+            output = required(tool, "-w", "2", "-S", "OUTPUT",
+                              message="Не удалось проверить временные правила Kachur.")
+        chain = run(tool, "-w", "2", "-S", FIREWALL_CHAIN)
+        if chain.returncode == 0:
+            required(tool, "-w", "2", "-F", FIREWALL_CHAIN,
+                     message="Не удалось очистить временную цепочку Kachur.")
+            required(tool, "-w", "2", "-X", FIREWALL_CHAIN,
+                     message="Не удалось удалить временную цепочку Kachur.")
+
+
+def install_firewall_bypass(ipv6_tunnel):
+    """Allow only tunnel egress and the encrypted AWG endpoint past stale Amnezia anchors."""
+    families = (("-4", "iptables"), ("-6", "ip6tables"))
+    anchored = {}
+    for family, tool in families:
+        if not shutil.which(tool, path=ENV["PATH"]):
+            continue
+        output = required(tool, "-w", "2", "-S", "OUTPUT",
+                          message="Не удалось проверить правила OUTPUT AmneziaVPN.")
+        anchored[family] = bool(re.search(
+            r"(?:^|\\s)(?:-j|-g) amnvpn\\.anchors(?:\\s|$)", output
+        ))
+    if not any(anchored.values()):
+        return
+
+    endpoints = peer_endpoints()
+    for family, tool in families:
+        if not anchored.get(family):
+            continue
+        rules = []
+        if family == "-4" or ipv6_tunnel:
+            rules.append(("-o", IFACE, "-j", "ACCEPT"))
+        for address, port in endpoints:
+            endpoint_family = "-4" if address.version == 4 else "-6"
+            if endpoint_family != family:
+                continue
+            egress = route_device(str(address), family, mark=MARK)
+            if not egress or egress in {IFACE, "amn0"}:
+                raise NetworkError("Не удалось определить физический маршрут до сервера Kachur.")
+            rules.append((
+                "-o", egress, "-d", str(address), "-p", "udp",
+                "--dport", str(port), "-j", "ACCEPT",
+            ))
+        if not rules:
+            continue
+        existing = run(tool, "-w", "2", "-S", FIREWALL_CHAIN)
+        if existing.returncode == 0:
+            raise NetworkError("Обнаружена незавершённая цепочка Kachur. Выполните отключение Kachur и повторите попытку.")
+        required(tool, "-w", "2", "-N", FIREWALL_CHAIN,
+                 message="Не удалось создать временную цепочку Kachur.")
+        try:
+            for rule in rules:
+                required(tool, "-w", "2", "-A", FIREWALL_CHAIN, *rule,
+                         message="Не удалось добавить ограниченное исключение Kachur.")
+            required(tool, "-w", "2", "-A", FIREWALL_CHAIN, "-j", "RETURN",
+                     message="Не удалось завершить временную цепочку Kachur.")
+            required(tool, "-w", "2", "-I", "OUTPUT", "1", "-j", FIREWALL_CHAIN,
+                     message="Не удалось включить ограниченное исключение Kachur.")
+        except NetworkError:
+            run(tool, "-w", "2", "-D", "OUTPUT", "-j", FIREWALL_CHAIN)
+            run(tool, "-w", "2", "-F", FIREWALL_CHAIN)
+            run(tool, "-w", "2", "-X", FIREWALL_CHAIN)
+            raise
+        print(
+            f"KillSwitch {family} сохранён; разрешён только трафик через kch0 "
+            "и зашифрованный UDP-трафик к серверу Kachur.",
+            flush=True,
+        )
 
 
 def enabled_families():
@@ -148,6 +260,8 @@ def configure(uid):
     check_amnezia()
     if device(IFACE):
         raise NetworkError("Интерфейс kch0 уже занят. Отключите предыдущий запуск Kachur.")
+    # Recover only our own orphaned exception chain from an interrupted run.
+    remove_firewall_bypass()
     config, dns, ipv6 = load_profile()
     families = enabled_families()
     ipv6_available = "-6" in families
@@ -172,6 +286,7 @@ def configure(uid):
              message="AmneziaWG не поднял kch0. Проверьте установленный движок и профиль.")
     required("awg", "set", IFACE, "fwmark", MARK,
              message="Не удалось назначить метку транспорта AWG.")
+    install_firewall_bypass(ipv6)
     for family in families:
         route = ("default", "dev", IFACE) if family == "-4" or ipv6 else ("unreachable", "default")
         required("ip", family, "route", "add", *route, "table", TABLE, "proto", PROTOCOL,
@@ -211,6 +326,10 @@ def probe(uid):
 
 def cleanup():
     if not OWNED.exists():
+        if device(IFACE):
+            raise NetworkError("kch0 существует без маркера владения; интерфейс оставлен без изменений.")
+        remove_firewall_bypass()
+        print("Откат Kachur: временные правила очищены.", flush=True)
         return
     families = OWNED.read_text(encoding="ascii").splitlines()
     if device(IFACE):
@@ -227,7 +346,10 @@ def cleanup():
             raise NetworkError("Откат маршрутов неполный. Проверьте журнал службы Kachur.")
     if device(IFACE):
         raise NetworkError("Интерфейс kch0 остался после отката. Проверьте журнал службы Kachur.")
-    print("Откат Kachur: интерфейс, маршруты и DNS сняты.", flush=True)
+    # Amnezia's original OUTPUT anchors were never removed or edited.
+    remove_firewall_bypass()
+    OWNED.unlink(missing_ok=True)
+    print("Откат Kachur: интерфейс, маршруты, DNS и временные правила сняты.", flush=True)
 
 
 def notify_ready():
@@ -287,6 +409,8 @@ def main(argv):
         return result
     if argv == ["disconnect"]:
         required("systemctl", "stop", UNIT, timeout=65, message="Не удалось остановить службу Kachur.")
+        # Also remove a Kachur-owned firewall chain left by an interrupted stop.
+        cleanup()
         if device(IFACE):
             raise NetworkError("kch0 остался активен. Проверьте журнал службы Kachur.")
         for family in enabled_families():

@@ -91,12 +91,12 @@ class NetworkTests(unittest.TestCase):
             if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
                 kachur = "-A OUTPUT -j KACHUR_OUT\n" if state["jump"] else ""
                 return "-P OUTPUT ACCEPT\n" + kachur + "-A OUTPUT -j amnvpn.anchors\n"
+            if args[:5] == ("iptables", "-w", "2", "-D", "OUTPUT"):
+                state["jump"] = False
+                return ""
             return ""
 
         def run(*args, **kwargs):
-            if args[:5] == ("iptables", "-w", "2", "-D", "OUTPUT"):
-                state["jump"] = False
-                return SimpleNamespace(returncode=0, stdout="")
             if args[:5] == ("iptables", "-w", "2", "-S", "KACHUR_OUT"):
                 return SimpleNamespace(returncode=0, stdout="-N KACHUR_OUT")
             return SimpleNamespace(returncode=1, stdout="")

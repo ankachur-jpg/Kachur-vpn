@@ -7,11 +7,12 @@ import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 /**
  * Remote-first TV entry point. The existing phone activity and tunnel engine are unchanged.
- * Connecting and importing profiles still use MainActivity until the TV consent flow is ready.
+ * Imports use MainActivity; connections use the existing quick-connect consent flow.
  */
 class TvHomeActivity : Activity() {
     private lateinit var status: TextView
@@ -24,7 +25,7 @@ class TvHomeActivity : Activity() {
         fun dp(value: Int) = (value * scale + 0.5f).toInt()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
             setPadding(dp(48), dp(32), dp(48), dp(32))
             setBackgroundColor(0xff101923.toInt())
         }
@@ -68,7 +69,10 @@ class TvHomeActivity : Activity() {
         action("Настройки и профили") {
             startActivity(Intent(this, MainActivity::class.java))
         }
-        setContentView(root)
+        setContentView(ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        })
         open.requestFocus()
     }
 

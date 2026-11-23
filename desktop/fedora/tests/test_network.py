@@ -41,9 +41,9 @@ class NetworkTests(unittest.TestCase):
     def test_stale_amnezia_anchor_gets_only_scoped_kachur_exception(self):
         def required(*args, **kwargs):
             if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
-                return "-P OUTPUT ACCEPT\\n-A OUTPUT -j amnvpn.anchors\\n"
+                return "-P OUTPUT ACCEPT\n-A OUTPUT -j amnvpn.anchors\n"
             if args[:5] == ("ip6tables", "-w", "2", "-S", "OUTPUT"):
-                return "-P OUTPUT ACCEPT\\n"
+                return "-P OUTPUT ACCEPT\n"
             return ""
 
         with patch.object(network, "required", side_effect=required) as req, patch.object(
@@ -72,8 +72,8 @@ class NetworkTests(unittest.TestCase):
 
     def test_peer_endpoints_parse_ipv4_and_ipv6(self):
         output = (
-            "peer4 48.102.252.233:37649\\n"
-            "peer6 [2001:db8::1]:51820\\n"
+            "peer4 48.102.252.233:37649\n"
+            "peer6 [2001:db8::1]:51820\n"
         )
         with patch.object(network, "required", return_value=output):
             self.assertEqual(
@@ -89,8 +89,8 @@ class NetworkTests(unittest.TestCase):
 
         def required(*args, **kwargs):
             if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
-                kachur = "-A OUTPUT -j KACHUR_OUT\\n" if state["jump"] else ""
-                return "-P OUTPUT ACCEPT\\n" + kachur + "-A OUTPUT -j amnvpn.anchors\\n"
+                kachur = "-A OUTPUT -j KACHUR_OUT\n" if state["jump"] else ""
+                return "-P OUTPUT ACCEPT\n" + kachur + "-A OUTPUT -j amnvpn.anchors\n"
             return ""
 
         def run(*args, **kwargs):

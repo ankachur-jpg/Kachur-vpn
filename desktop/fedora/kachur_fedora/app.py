@@ -111,7 +111,8 @@ class MainWindow(Adw.ApplicationWindow):
         profile_card.append(self.profile)
         profile_card.append(label(
             "Для Kachur зарезервирован отдельный интерфейс kch0 и профиль "
-            "/etc/amnezia/amneziawg/kch0.conf. Перед подключением отключите AmneziaVPN в её окне.",
+            "/etc/amnezia/amneziawg/kch0.conf. Перед подключением отключите AmneziaVPN. "
+            "Одновременная работа двух туннелей запрещена.",
             "kachur-subtitle",
         ))
         body.append(profile_card)
@@ -151,8 +152,9 @@ class MainWindow(Adw.ApplicationWindow):
         body.append(self.offline_test_button)
         body.append(label(
             "Автономный тест запускается только после отключения AmneziaVPN. "
-            "Kachur не отключает и не меняет настройки AmneziaVPN. "
-            "После проверки отчёт сохраняется в домашнюю папку.",
+            "Если остались её правила KillSwitch, Kachur временно разрешит только "
+            "свой туннель и адрес сервера, не редактируя цепочки Amnezia. "
+            "После проверки исключение снимается, отчёт сохраняется дома.",
             "kachur-subtitle",
         ))
         body.append(label(
@@ -172,7 +174,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         body.append(label(
             "Автономная проверка ограничена по времени службой systemd. "
-            "После теста Kachur удаляет свой интерфейс, маршруты и DNS; "
+            "После теста Kachur удаляет свою цепочку firewall, интерфейс, маршруты и DNS; "
             "затем можно снова включить AmneziaVPN.",
             "kachur-subtitle",
         ))
@@ -314,10 +316,11 @@ class MainWindow(Adw.ApplicationWindow):
             self,
             "Автономная проверка Kachur",
             "Перед запуском отключите AmneziaVPN в её окне. "
-            "Это приложение не отключает Amnezia и не меняет её настройки. "
-            "Тест проверит HTTPS и DNS, затем автоматически удалит свой интерфейс, "
-            "маршруты и DNS. Отчёт будет сохранён в домашнюю папку. "
-            "После завершения снова включите AmneziaVPN, чтобы вернуться в ChatGPT.",
+            "Kachur не отключает Amnezia и не редактирует её цепочки firewall. "
+            "Если остались правила KillSwitch, тест временно разрешит только "
+            "трафик через kch0 и UDP к серверу Kachur. Затем автоматически удалит "
+            "свою цепочку firewall, интерфейс, маршруты и DNS. Отчёт сохранится "
+            "в домашнюю папку. После завершения снова включите AmneziaVPN.",
         )
         dialog.add_response("cancel", "Отмена")
         dialog.add_response("run", "Amnezia отключена — запустить тест")

@@ -201,7 +201,7 @@ def install_firewall_bypass(ipv6_tunnel):
         output = required(tool, "-w", "2", "-S", "OUTPUT",
                           message="Не удалось проверить правила OUTPUT AmneziaVPN.")
         anchored[family] = bool(re.search(
-            r"(?:^|\\s)(?:-j|-g) amnvpn\\.anchors(?:\\s|$)", output
+            r"(?:^|\s)(?:-j|-g) amnvpn\.anchors(?:\s|$)", output
         ))
     if not any(anchored.values()):
         return

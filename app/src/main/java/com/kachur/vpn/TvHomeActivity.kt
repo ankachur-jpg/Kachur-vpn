@@ -47,7 +47,10 @@ class TvHomeActivity : Activity() {
                 topMargin = dp(14)
             })
         }
-        val open = action("Подключить / выбрать сервер") {
+        val open = action("Подключить VPN") {
+            startActivity(VpnQuickActivity.intent(this))
+        }
+        action("Выбрать сервер / импортировать профиль") {
             startActivity(Intent(this, MainActivity::class.java))
         }
         action("Отключить VPN") {

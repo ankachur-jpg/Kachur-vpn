@@ -155,14 +155,26 @@ class NetworkTests(unittest.TestCase):
                     ("ip", "-6", "route", "show", "table", network.TABLE),
                 ])
 
-    def test_cleanup_leaves_network_untouched_when_setup_never_owned_it(self):
+    def test_cleanup_recovers_reserved_routes_without_ownership_marker(self):
         with TemporaryDirectory() as directory:
             with patch.object(network, "OWNED", Path(directory) / "missing"), patch.object(
-                network, "run",
-            ) as run, patch.object(network, "remove_firewall_bypass") as firewall:
+                network, "device", return_value=False,
+            ), patch.object(
+                network, "run", return_value=SimpleNamespace(returncode=0, stdout="")
+            ) as run, patch.object(
+                network, "required", return_value=""
+            ), patch.object(network, "remove_firewall_bypass") as firewall:
                 network.cleanup()
-                run.assert_not_called()
-                firewall.assert_called_once_with()
+
+        self.assertEqual([call.args for call in run.call_args_list], [
+            ("ip", "-4", "rule", "delete", *network.RULE),
+            ("ip", "-4", "route", "flush", "table", network.TABLE, "proto", network.PROTOCOL),
+            ("ip", "-6", "rule", "delete", *network.RULE),
+            ("ip", "-6", "route", "flush", "table", network.TABLE, "proto", network.PROTOCOL),
+            ("ip", "-4", "route", "show", "table", network.TABLE),
+            ("ip", "-6", "route", "show", "table", network.TABLE),
+        ])
+        firewall.assert_called_once_with()
 
     def test_probe_refuses_to_try_https_on_wrong_route(self):
         with patch.object(network, "check_amnezia"), patch.object(network, "device", return_value=True), patch.object(

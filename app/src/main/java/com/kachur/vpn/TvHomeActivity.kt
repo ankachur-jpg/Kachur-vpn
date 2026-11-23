@@ -15,6 +15,7 @@ import android.widget.TextView
  */
 class TvHomeActivity : Activity() {
     private lateinit var status: TextView
+    private lateinit var autoStart: Button
     private val observer: () -> Unit = { updateStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -57,6 +58,11 @@ class TvHomeActivity : Activity() {
             VpnConnection.stop()
             updateStatus()
         }
+        autoStart = action("Автоподключение") {
+            val settings = VpnLaunchSettings(applicationContext)
+            settings.setEnabled(!settings.enabled)
+            updateStatus()
+        }
         action("Настройки и профили") {
             startActivity(Intent(this, MainActivity::class.java))
         }
@@ -77,5 +83,7 @@ class TvHomeActivity : Activity() {
 
     private fun updateStatus() {
         status.text = getString(VpnConnection.message)
+        val settings = VpnLaunchSettings(applicationContext)
+        autoStart.text = if (settings.enabled) "Автоподключение: включено" else "Автоподключение: выключено"
     }
 }

@@ -174,9 +174,10 @@ def check_connection() -> None:
 def run_offline_test() -> tuple[Path, bool, str]:
     """Run a bounded, one-shot test and save its non-secret report locally.
 
-    The privileged helper refuses to start while AmneziaVPN is active or its
-    OUTPUT kill-switch anchors remain. The helper's systemd unit owns cleanup,
-    so it can roll back even if this desktop process is interrupted.
+    The privileged helper refuses to start while AmneziaVPN is active.
+    If stale Amnezia OUTPUT anchors remain, it adds a temporary Kachur-owned
+    exception for kch0 and the encrypted peer endpoint only. The helper's
+    systemd unit owns cleanup, so it can roll back if this desktop process stops.
     """
     success = False
     detail = ""

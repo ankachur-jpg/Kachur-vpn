@@ -41,7 +41,11 @@ class NetworkTests(unittest.TestCase):
     def test_stale_amnezia_anchor_gets_only_scoped_kachur_exception(self):
         def required(*args, **kwargs):
             if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
-                return "-P OUTPUT ACCEPT\n-A OUTPUT -j amnvpn.anchors\n"
+                return (
+                    "-P OUTPUT ACCEPT\n"
+                    "-A OUTPUT -m conntrack --ctstate ESTABLISHED -j ACCEPT\n"
+                    "-A OUTPUT -j amnvpn.anchors\n"
+                )
             if args[:5] == ("ip6tables", "-w", "2", "-S", "OUTPUT"):
                 return "-P OUTPUT ACCEPT\n"
             return ""
@@ -65,7 +69,7 @@ class NetworkTests(unittest.TestCase):
             commands,
         )
         self.assertIn(
-            ("iptables", "-w", "2", "-I", "OUTPUT", "1", "-j", "KACHUR_OUT"),
+            ("iptables", "-w", "2", "-I", "OUTPUT", "2", "-j", "KACHUR_OUT"),
             commands,
         )
         self.assertFalse(any("amnvpn.anchors" in arg for call in commands for arg in call))

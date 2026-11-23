@@ -13,7 +13,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .backend import (
     VPNError, VPNState, check_connection, check_interface, import_profile, pretty_bytes, pretty_handshake,
-    read_state, switch_tunnel,
+    read_state, run_offline_test, switch_tunnel,
 )
 
 STYLES = b"""
@@ -142,6 +142,19 @@ class MainWindow(Adw.ApplicationWindow):
         self.connection_button.set_sensitive(False)
         self.connection_button.connect("clicked", self.on_check_connection)
         body.append(self.connection_button)
+
+        self.offline_test_button = Gtk.Button(label="Автономный тест с отчётом")
+        self.offline_test_button.set_tooltip_text(
+            "Короткий тест Kachur с автоматическим откатом и локальным журналом"
+        )
+        self.offline_test_button.connect("clicked", self.on_offline_test_clicked)
+        body.append(self.offline_test_button)
+        body.append(label(
+            "Автономный тест запускается только после отключения AmneziaVPN. "
+            "Kachur не отключает и не меняет настройки AmneziaVPN. "
+            "После проверки отчёт сохраняется в домашнюю папку.",
+            "kachur-subtitle",
+        ))
         body.append(label(
             "Автообновление счётчиков не запрашивает права администратора. "
             "Для чтения времени handshake нажмите кнопку: появится отдельный "
@@ -158,8 +171,9 @@ class MainWindow(Adw.ApplicationWindow):
         body.append(self.refresh_button)
 
         body.append(label(
-            "Первый рабочий прототип: системный AmneziaWG + ручное включение через polkit. "
-            "IP-исключения, автоподключение и плитку GNOME разрабатываем отдельно.",
+            "Автономная проверка ограничена по времени службой systemd. "
+            "После теста Kachur удаляет свой интерфейс, маршруты и DNS; "
+            "затем можно снова включить AmneziaVPN.",
             "kachur-subtitle",
         ))
         GLib.idle_add(self.refresh)
@@ -287,6 +301,77 @@ class MainWindow(Adw.ApplicationWindow):
 
         Thread(target=worker, daemon=True).start()
 
+    def on_offline_test_clicked(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running:
+            return
+        if self.current_state.active:
+            self.message.set_text(
+                "Сначала отключите Kachur VPN. Автономный тест использует отдельный запуск."
+            )
+            return
+
+        dialog = Adw.MessageDialog.new(
+            self,
+            "Автономная проверка Kachur",
+            "Перед запуском отключите AmneziaVPN в её окне. "
+            "Это приложение не отключает Amnezia и не меняет её настройки. "
+            "Тест проверит HTTPS и DNS, затем автоматически удалит свой интерфейс, "
+            "маршруты и DNS. Отчёт будет сохранён в домашнюю папку. "
+            "После завершения снова включите AmneziaVPN, чтобы вернуться в ChatGPT.",
+        )
+        dialog.add_response("cancel", "Отмена")
+        dialog.add_response("run", "Amnezia отключена — запустить тест")
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.set_response_appearance("run", Adw.ResponseAppearance.SUGGESTED)
+        dialog.connect("response", self._on_offline_test_confirmed)
+        dialog.present()
+
+    def _on_offline_test_confirmed(
+        self, dialog: Adw.MessageDialog, response: str
+    ) -> None:
+        dialog.close()
+        if response != "run" or self.busy or self.current_state.active:
+            return
+
+        self.busy = True
+        self.offline_test_button.set_sensitive(False)
+        self.power.set_sensitive(False)
+        self.import_button.set_sensitive(False)
+        self.handshake_button.set_sensitive(False)
+        self.connection_button.set_sensitive(False)
+        self.message.set_text(
+            "Выполняется автономный тест. Может появиться системный запрос пароля. "
+            "Не закрывайте это окно до сообщения о завершении."
+        )
+
+        def worker() -> None:
+            try:
+                report, success, detail = run_offline_test()
+            except VPNError as exc:
+                report, success, detail = None, False, str(exc)
+            GLib.idle_add(self._offline_test_finished, report, success, detail)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _offline_test_finished(
+        self, report: Path | None, success: bool, detail: str
+    ) -> bool:
+        self.busy = False
+        self.power.set_sensitive(True)
+        self.import_button.set_sensitive(not self.current_state.active)
+        self.offline_test_button.set_sensitive(not self.current_state.active)
+        if report is None:
+            self.message.set_text(detail)
+        else:
+            result = "Автономная проверка пройдена." if success else "Автономная проверка не пройдена."
+            self.message.set_text(
+                f"{result}\nОтчёт сохранён: {report}"
+                + (f"\n{detail[-700:]}" if not success and detail else "")
+            )
+        self.refresh()
+        return GLib.SOURCE_REMOVE
+
     def on_check_connection(self, *_args: object) -> None:
         if self.busy or self._handshake_check_running or not self.current_state.active:
             return
@@ -359,6 +444,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.message.set_text(error)
             self.power.set_sensitive(False)
             self.handshake_button.set_sensitive(False)
+            self.offline_test_button.set_sensitive(False)
             return GLib.SOURCE_REMOVE
         assert state is not None
 
@@ -402,6 +488,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.power.set_sensitive(not self.busy)
         self.handshake_button.set_sensitive(state.active and not self.busy)
         self.connection_button.set_sensitive(state.active and not self.busy)
+        self.offline_test_button.set_sensitive(not state.active and not self.busy)
         self.import_button.set_sensitive(not state.active and not self.busy)
         return GLib.SOURCE_REMOVE
 

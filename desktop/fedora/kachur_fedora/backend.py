@@ -152,7 +152,7 @@ def import_profile(source_path: str) -> None:
 def _network_action(action: str) -> None:
     if not _NETWORK_HELPER.is_file():
         raise VPNError("Установите сетевой помощник Kachur по инструкции для Fedora.")
-    result = _run([_tool("pkexec"), str(_NETWORK_HELPER), action], timeout=175)
+    result = _run([_tool("pkexec"), str(_NETWORK_HELPER), action], timeout=185)
     if result.returncode in (126, 127):
         raise VPNError("Запрос прав администратора отменён или недоступен.")
     if result.returncode:
@@ -187,7 +187,7 @@ def run_offline_test() -> tuple[Path, bool, str]:
                 "Сетевой помощник Kachur не установлен. Выполните установку из README."
             )
         result = _run(
-            [_tool("pkexec"), str(_NETWORK_HELPER), "offline-test"], timeout=175
+            [_tool("pkexec"), str(_NETWORK_HELPER), "offline-test"], timeout=185
         )
         detail = "\n".join(
             part for part in (result.stdout.strip(), result.stderr.strip()) if part

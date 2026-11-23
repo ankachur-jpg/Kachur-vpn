@@ -255,7 +255,7 @@ def install_firewall_bypass(ipv6_tunnel):
                 raise NetworkError("Не удалось определить физический маршрут до сервера Kachur.")
             rules.append((
                 "-o", egress, "-d", str(address), "-p", "udp",
-                "--dport", str(port), "-j", "ACCEPT",
+                "--dport", str(port), "-m", "mark", "--mark", MARK, "-j", "ACCEPT",
             ))
         if not rules:
             continue
@@ -346,15 +346,22 @@ def probe(uid):
     check_amnezia()
     if not device(IFACE) or route_device(TARGET, uid=uid) != IFACE:
         raise NetworkError("Проверочный IPv4-маршрут не проходит через kch0.")
-    required("curl", "--disable", "--noproxy", "*", "--ipv4", "--interface", f"if!{IFACE}",
-             "--proto", "=https", "--resolve", f"{PROBE_HOST}:443:{TARGET}", "--fail",
-             "--silent", "--connect-timeout", "6", "--max-time", "12", "--output", "/dev/null",
-             f"https://{PROBE_HOST}/cdn-cgi/trace", timeout=14,
+    https = (
+        "curl", "--disable", "--noproxy", "*", "--ipv4", "--interface", f"if!{IFACE}",
+        "--proto", "=https", "--fail", "--silent", "--connect-timeout", "6",
+        "--max-time", "12", "--output", "/dev/null",
+    )
+    url = f"https://{PROBE_HOST}/cdn-cgi/trace"
+    required(*https, "--resolve", f"{PROBE_HOST}:443:{TARGET}", url, timeout=14,
              message="Тест HTTPS через kch0 не прошёл. Проверьте доступность туннеля.")
     print("HTTPS через kch0: OK.", flush=True)
     required("resolvectl", "query", "-4", "-i", IFACE, "--cache=no", PROBE_HOST, timeout=8,
              message="HTTPS работает, но запрос DNS через kch0 не прошёл.")
     print("DNS через kch0: OK.", flush=True)
+    required(*https, url, timeout=14,
+             message="DNS на kch0 отвечает, но HTTPS по имени через системный DNS не прошёл.")
+    print("HTTPS по имени через системный DNS и kch0: OK.", flush=True)
+    check_amnezia()
 
 
 def cleanup():
@@ -392,18 +399,18 @@ def start(action, uid):
     command = [
         "systemd-run", "--unit", UNIT, "--collect", "--quiet",
         "--property=RuntimeDirectory=kachur-vpn", "--property=RuntimeDirectoryMode=0700",
-        "--property=UMask=0077", "--property=TimeoutStartSec=70s",
+        "--property=UMask=0077", "--property=TimeoutStartSec=95s",
         "--property=TimeoutStopSec=60s",
         f"--property=ExecStopPost={Path(__file__)} cleanup",
     ]
     if action == "offline-test":
         log_tag = f"kachur-offline-{uuid4().hex}"
-        command.extend(("--wait", "--property=Type=exec", "--property=RuntimeMaxSec=75s",
+        command.extend(("--wait", "--property=Type=exec", "--property=RuntimeMaxSec=95s",
                         f"--property=SyslogIdentifier={log_tag}"))
     else:
         command.extend(("--property=Type=notify", "--property=NotifyAccess=main"))
     command.extend((str(Path(__file__)), "worker", action, str(uid)))
-    result = run(*command, timeout=155, capture=False).returncode
+    result = run(*command, timeout=170, capture=False).returncode
     if action == "offline-test":
         journal = required("journalctl", "--no-pager", "-o", "cat", "-t", log_tag,
                            message="Не удалось прочитать журнал автономной проверки.")
@@ -425,7 +432,10 @@ def main(argv):
         if argv[1] == "connect":
             notify_ready()
             while device(IFACE):
-                time.sleep(2)
+                if device("amn0"):
+                    print("Обнаружена AmneziaVPN. Kachur завершает сеанс и снимает свои правила.", flush=True)
+                    break
+                time.sleep(1)
         return 0
     uid = int(os.environ.get("PKEXEC_UID", os.environ.get("SUDO_UID", "0")))
     if argv in (["connect"], ["offline-test"]):

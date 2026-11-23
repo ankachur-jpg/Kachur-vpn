@@ -38,7 +38,8 @@ class NetworkTests(unittest.TestCase):
                 network.check_amnezia()
             run.assert_not_called()
 
-    def test_stale_amnezia_anchor_gets_only_scoped_kachur_exception(self):
+    @patch.object(network.shutil, "which", return_value="/usr/bin/iptables")
+    def test_stale_amnezia_anchor_gets_only_scoped_kachur_exception(self, _which):
         def required(*args, **kwargs):
             if args[:5] == ("iptables", "-w", "2", "-S", "OUTPUT"):
                 return (
@@ -65,7 +66,8 @@ class NetworkTests(unittest.TestCase):
         )
         self.assertIn(
             ("iptables", "-w", "2", "-A", "KACHUR_OUT", "-o", "wlp2s0", "-d",
-             "48.102.252.233", "-p", "udp", "--dport", "37649", "-j", "ACCEPT"),
+             "48.102.252.233", "-p", "udp", "--dport", "37649", "-m", "mark",
+             "--mark", network.MARK, "-j", "ACCEPT"),
             commands,
         )
         self.assertIn(
@@ -88,7 +90,8 @@ class NetworkTests(unittest.TestCase):
                 ],
             )
 
-    def test_remove_firewall_bypass_leaves_amnezia_anchor_intact(self):
+    @patch.object(network.shutil, "which", return_value="/usr/bin/iptables")
+    def test_remove_firewall_bypass_leaves_amnezia_anchor_intact(self, _which):
         state = {"jump": True}
 
         def required(*args, **kwargs):
@@ -132,7 +135,7 @@ class NetworkTests(unittest.TestCase):
         ):
             self.assertEqual(network.start("offline-test", 1000), 0)
             args = run.call_args.args
-            self.assertIn("--property=RuntimeMaxSec=75s", args)
+            self.assertIn("--property=RuntimeMaxSec=95s", args)
             self.assertIn("--wait", args)
             self.assertIn(f"--property=ExecStopPost={SCRIPT} cleanup", args)
 
@@ -183,3 +186,30 @@ class NetworkTests(unittest.TestCase):
             with self.assertRaisesRegex(network.NetworkError, "не проходит через kch0"):
                 network.probe(1000)
             run.assert_not_called()
+
+    def test_probe_checks_system_dns_with_https_bound_to_tunnel(self):
+        with patch.object(network, "check_amnezia"), patch.object(
+            network, "device", return_value=True,
+        ), patch.object(network, "route_device", return_value="kch0"), patch.object(
+            network, "required",
+        ) as required:
+            network.probe(1000)
+
+        direct, dns, by_name = (call.args for call in required.call_args_list)
+        self.assertIn("--resolve", direct)
+        self.assertEqual(dns[:5], ("resolvectl", "query", "-4", "-i", "kch0"))
+        self.assertEqual(by_name[0], "curl")
+        self.assertIn("if!kch0", by_name)
+        self.assertNotIn("--resolve", by_name)
+
+    def test_connect_worker_exits_when_amnezia_appears(self):
+        with patch.object(network.os, "geteuid", return_value=0), patch.object(
+            network, "configure",
+        ), patch.object(network, "probe"), patch.object(network, "notify_ready") as ready, patch.object(
+            network, "device", side_effect=[True, False, True, True],
+        ) as device, patch.object(network.time, "sleep") as sleep:
+            self.assertEqual(network.main(["worker", "connect", "1000"]), 0)
+
+        ready.assert_called_once_with()
+        self.assertEqual([call.args[0] for call in device.call_args_list], ["kch0", "amn0"] * 2)
+        sleep.assert_called_once_with(1)

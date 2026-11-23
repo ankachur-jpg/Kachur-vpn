@@ -60,7 +60,9 @@ class TvHomeActivity : Activity() {
         }
         autoStart = action("Автоподключение") {
             val settings = VpnLaunchSettings(applicationContext)
-            settings.setEnabled(!settings.enabled)
+            val enabled = !settings.enabled
+            settings.setEnabled(enabled)
+            if (enabled) settings.setPaused(false)
             updateStatus()
         }
         action("Настройки и профили") {

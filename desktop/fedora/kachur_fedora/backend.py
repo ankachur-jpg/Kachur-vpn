@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import os
 
 _VALID_IFACE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,14}$")
 _NETWORK_HELPER = Path("/usr/local/libexec/kachur-vpn-network")
@@ -168,3 +169,55 @@ def switch_tunnel(name: str, connect: bool) -> None:
 
 def check_connection() -> None:
     _network_action("check")
+
+
+def run_offline_test() -> tuple[Path, bool, str]:
+    """Run a bounded, one-shot test and save its non-secret report locally.
+
+    The privileged helper refuses to start while AmneziaVPN is active or its
+    OUTPUT kill-switch anchors remain. The helper's systemd unit owns cleanup,
+    so it can roll back even if this desktop process is interrupted.
+    """
+    success = False
+    detail = ""
+    try:
+        if not _NETWORK_HELPER.is_file():
+            raise VPNError(
+                "Сетевой помощник Kachur не установлен. Выполните установку из README."
+            )
+        result = _run(
+            [_tool("pkexec"), str(_NETWORK_HELPER), "offline-test"], timeout=175
+        )
+        detail = "\n".join(
+            part for part in (result.stdout.strip(), result.stderr.strip()) if part
+        )
+        success = result.returncode == 0
+        if result.returncode in (126, 127):
+            detail = detail or "Запрос прав администратора отменён или недоступен."
+        elif not success:
+            detail = detail or "Автономная проверка завершилась с ошибкой."
+        else:
+            detail = detail or "Проверка завершена без диагностического вывода."
+    except VPNError as exc:
+        detail = str(exc)
+
+    stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S-%f")
+    log_path = Path.home() / f"kachur-offline.{stamp}.log"
+    report = (
+        f"Kachur VPN — Fedora offline test\n"
+        f"Время: {datetime.now().astimezone().isoformat(timespec='seconds')}\n"
+        f"Результат: {'успех' if success else 'ошибка'}\n"
+        f"\n{detail}\n"
+    )
+    try:
+        fd = os.open(
+            str(log_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(report)
+    except OSError as exc:
+        raise VPNError(
+            "Не удалось сохранить отчёт автономной проверки в домашнюю папку."
+        ) from exc
+    return log_path, success, detail

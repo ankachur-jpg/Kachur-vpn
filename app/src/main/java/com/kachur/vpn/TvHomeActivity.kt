@@ -66,6 +66,8 @@ class TvHomeActivity : Activity() {
             if (enabled) settings.setPaused(false)
             updateStatus()
         }
+        root.addView(label("VPN включается после загрузки приставки.\nСначала выберите профиль и один раз разрешите VPN.", 16f),
+            LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         action("Настройки и профили") {
             startActivity(Intent(this, MainActivity::class.java))
         }

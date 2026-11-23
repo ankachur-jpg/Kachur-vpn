@@ -1,12 +1,14 @@
 package com.kachur.vpn
 
 import android.view.View
+import android.content.ComponentName
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ScrollView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNotNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -17,6 +19,16 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = TestKachurApplication::class)
 class TvHomeActivityTest {
+    @Test
+    fun launcherResolvesTvBannerAndExplicitFlatIcon() {
+        val app = RuntimeEnvironment.getApplication() as KachurApplication
+        val info = app.packageManager.getActivityInfo(ComponentName(app, TvHomeActivity::class.java), 0)
+        assertEquals(R.drawable.tv_banner, info.banner)
+        assertEquals(R.drawable.ic_tv_launcher, info.icon)
+        assertNotNull(info.loadBanner(app.packageManager))
+        assertNotNull(info.loadIcon(app.packageManager))
+    }
+
     @Test
     fun autoConnectChoiceSurvivesActivityRecreationAndEnablingClearsPause() {
         val settings = VpnLaunchSettings(RuntimeEnvironment.getApplication())

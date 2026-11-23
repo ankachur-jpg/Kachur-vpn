@@ -14,28 +14,40 @@ import android.os.Looper
  */
 class TvBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         val app = context.applicationContext
-        if (!app.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) return
+        if (!shouldConnectAfterBoot(app, intent.action)) return
         val settings = VpnLaunchSettings(app)
-        if (!settings.enabled || settings.paused || VpnService.prepare(app) != null) return
         val pending = goAsync()
         VpnConnection.systemCalls.execute {
-            val selection = try { app.localProfiles().readSelected()?.selected?.profile }
+            val selection = try { app.localProfiles().readSelected() }
                 catch (_: Exception) { null }
             Handler(Looper.getMainLooper()).post {
                 try {
-                    if (selection != null && settings.enabled && !settings.paused &&
+                    val profile = selection?.selected?.profile
+                    if (selection != null && profile != null && settings.enabled &&
+                        app.localProfiles().revision() == selection.selected.revision &&
                         VpnService.prepare(app) == null && VpnConnection.phase == VpnPhase.IDLE &&
                         !VpnConnection.preparing) {
-                        VpnConnection.start(app, selection.config,
-                            VpnProfileLabels(app).country(selection.documentKey),
-                            selection.documentKey, selection.name)
+                        // A manual stop pauses the current session, not the next device boot.
+                        settings.setPaused(false)
+                        VpnConnection.start(app, profile.config,
+                            VpnProfileLabels(app).country(profile.documentKey),
+                            profile.documentKey, profile.name)
                     }
+                } catch (_: RuntimeException) {
+                    VpnConnection.record(R.string.vpn_start_error)
                 } finally {
                     pending.finish()
                 }
             }
         }
+    }
+
+    internal fun shouldConnectAfterBoot(context: Context, action: String?): Boolean {
+        if (action != Intent.ACTION_BOOT_COMPLETED ||
+            !context.packageManager.hasSystemFeature(PackageManager.FEATURE_LEANBACK) ||
+            !VpnLaunchSettings(context).enabled) return false
+        return try { VpnService.prepare(context) == null }
+            catch (_: RuntimeException) { false }
     }
 }

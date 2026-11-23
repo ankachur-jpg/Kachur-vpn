@@ -191,6 +191,33 @@ def remove_firewall_bypass():
                      message="Не удалось удалить временную цепочку Kachur.")
 
 
+def remove_policy_state(families):
+    """Remove only the policy rule and routes reserved by Kachur."""
+    for family in families:
+        run("ip", family, "rule", "delete", *RULE)
+        run("ip", family, "route", "flush", "table", TABLE, "proto", PROTOCOL)
+    for family in families:
+        rules = required("ip", family, "rule", "show",
+                         message="Не удалось проверить откат маршрутов.")
+        routes = run("ip", family, "route", "show", "table", TABLE).stdout
+        if re.search(rf"^{PRIORITY}:", rules, re.MULTILINE) or routes.strip():
+            raise NetworkError("Откат маршрутов неполный. Проверьте журнал службы Kachur.")
+
+
+def recover_stale_state():
+    """Recover Kachur's reserved state after a worker was interrupted."""
+    if device(IFACE):
+        raise NetworkError("kch0 уже существует; автоматическое восстановление остановлено.")
+    families = (
+        OWNED.read_text(encoding="ascii").splitlines()
+        if OWNED.exists() else ["-4", "-6"]
+    )
+    remove_policy_state(families)
+    remove_firewall_bypass()
+    OWNED.unlink(missing_ok=True)
+    CONFIG.unlink(missing_ok=True)
+
+
 def install_firewall_bypass(ipv6_tunnel):
     """Allow only tunnel egress and the encrypted AWG endpoint past stale Amnezia anchors."""
     families = (("-4", "iptables"), ("-6", "ip6tables"))
@@ -266,8 +293,8 @@ def configure(uid):
     check_amnezia()
     if device(IFACE):
         raise NetworkError("Интерфейс kch0 уже занят. Отключите предыдущий запуск Kachur.")
-    # Recover only our own orphaned exception chain from an interrupted run.
-    remove_firewall_bypass()
+    # Recover only Kachur's reserved routes, marker and firewall chain.
+    recover_stale_state()
     config, dns, ipv6 = load_profile()
     families = enabled_families()
     ipv6_available = "-6" in families
@@ -334,29 +361,22 @@ def cleanup():
     if not OWNED.exists():
         if device(IFACE):
             raise NetworkError("kch0 существует без маркера владения; интерфейс оставлен без изменений.")
-        remove_firewall_bypass()
-        print("Откат Kachur: временные правила очищены.", flush=True)
+        recover_stale_state()
+        print("Откат Kachur: временные правила и зарезервированные маршруты очищены.", flush=True)
         return
     families = OWNED.read_text(encoding="ascii").splitlines()
     if device(IFACE):
         # Removing the link also clears its per-link systemd-resolved settings.
         run("resolvectl", "revert", IFACE)
         run("ip", "link", "delete", "dev", IFACE)
-    for family in families:
-        run("ip", family, "rule", "delete", *RULE)
-        run("ip", family, "route", "flush", "table", TABLE, "proto", PROTOCOL)
-    for family in families:
-        rules = required("ip", family, "rule", "show", message="Не удалось проверить откат маршрутов.")
-        routes = run("ip", family, "route", "show", "table", TABLE).stdout
-        if re.search(rf"^{PRIORITY}:", rules, re.MULTILINE) or routes.strip():
-            raise NetworkError("Откат маршрутов неполный. Проверьте журнал службы Kachur.")
+    remove_policy_state(families)
     if device(IFACE):
         raise NetworkError("Интерфейс kch0 остался после отката. Проверьте журнал службы Kachur.")
     # Amnezia's original OUTPUT anchors were never removed or edited.
     remove_firewall_bypass()
     OWNED.unlink(missing_ok=True)
+    CONFIG.unlink(missing_ok=True)
     print("Откат Kachur: интерфейс, маршруты, DNS и временные правила сняты.", flush=True)
-
 
 def notify_ready():
     address = os.environ["NOTIFY_SOCKET"]

@@ -1,0 +1,97 @@
+name: Verify standalone smartphone test APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [test/phone-1.0.1]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout official AmneziaWG Android sources
+        uses: actions/checkout@v4
+        with:
+          repository: amnezia-vpn/amneziawg-android
+          ref: 5c16489e2cd9ed3a0a7a27c7445bba5238132f86
+          submodules: recursive
+          path: .upstream-awg
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 platforms;android-36 build-tools;34.0.0 build-tools;36.0.0 ndk;28.2.13676358 cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: false
+
+      - name: Build pinned AmneziaWG Android engine
+        run: bash third_party/amneziawg/build.sh .upstream-awg
+
+      - name: Build both smartphone packages
+        run: gradle assemblePhoneCheck assembleDebug --stacktrace
+
+      - name: Verify and name the smartphone APK
+        run: |
+          set -eu
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=Kachur-VPN-1.0.1-test.apk
+          cp app/build/outputs/apk/phoneCheck/*.apk "$apk"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+          "$tools/zipalign" -c -P 16 4 "$apk"
+          "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging"
+          grep -F "package: name='com.kachur.vpn.phonecheck' versionCode='10001' versionName='1.0.1'" "$RUNNER_TEMP/badging"
+          grep -F "application-label:'Kachur VPN Тест'" "$RUNNER_TEMP/badging"
+          unzip -Z1 "$apk" | grep -Fx "lib/arm64-v8a/libwg-go.so"
+          sha256sum "$apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kachur-VPN-1.0.1-test
+          path: Kachur-VPN-1.0.1-test.apk
+          if-no-files-found: error
+
+      - name: Enable KVM for emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install both packages and launch the test VPN on a phone emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: |
+            adb install app/build/outputs/apk/debug/app-debug.apk
+            adb install Kachur-VPN-1.0.1-test.apk
+            adb shell pm path com.kachur.vpn | grep -F base.apk
+            adb shell pm path com.kachur.vpn.phonecheck | grep -F base.apk
+            adb shell am start -W -n com.kachur.vpn.phonecheck/com.kachur.vpn.MainActivity | grep -F 'Status: ok'
+            sleep 2
+            adb shell pidof com.kachur.vpn.phonecheck

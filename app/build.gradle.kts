@@ -18,6 +18,12 @@ android {
         // Release APK signing is performed locally after Gradle has built the unsigned package.
         signingConfig = null
     }
+    buildTypes.create("mobileRelease") {
+        initWith(buildTypes.getByName("release"))
+        applicationIdSuffix = ".mobile"
+        signingConfig = null
+        matchingFallbacks += listOf("release")
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

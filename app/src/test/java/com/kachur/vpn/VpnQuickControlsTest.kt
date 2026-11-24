@@ -185,6 +185,16 @@ class VpnQuickControlsTest {
             assertEquals(Tile.STATE_INACTIVE, tileState())
 
             val foreground = VpnNotifications(app).build(VpnNotice(VpnConnection.noticeStatus, "Германия"), id)
+            val revision = VpnConnection.notificationRevision
+            val stale = VpnNotifications(app).build(VpnNotice(VpnConnection.noticeStatus, "Германия"), id + 1)
+            stale.deleteIntent.send()
+            main.idle()
+            assertEquals(revision, VpnConnection.notificationRevision)
+            foreground.deleteIntent.send()
+            main.idle()
+            assertEquals(revision + 1, VpnConnection.notificationRevision)
+            assertEquals(VpnNoticeStatus.RECONNECTING, VpnConnection.noticeStatus)
+            assertEquals(0, stops)
             foreground.actions.single().actionIntent.send()
             main.idle()
             assertEquals(1, stops)

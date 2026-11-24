@@ -84,6 +84,13 @@ jobs:
           fi
           "$tools/aapt2" dump badging "$apk" | sed -n '/^package:/p'
 
+      - name: Upload unsigned personal release for local signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kachur-VPN-release-unsigned
+          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          if-no-files-found: error
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

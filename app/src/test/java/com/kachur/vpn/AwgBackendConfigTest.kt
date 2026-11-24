@@ -58,6 +58,52 @@ class AwgBackendConfigTest {
     }
 
     @Test
+    @Config(sdk = [32, 34])
+    fun dnsHostsStayInsideTunnelDespiteBroadOrExactIpExclusions() {
+        val config = profile("DNS = 192.0.2.53, 2001:db8::53",
+            "AllowedIPs = 0.0.0.0/0, ::/0").toBackendConfig()
+        for (bypass in listOf(setOf("192.0.2.0/24", "2001:db8::/48"),
+            setOf("192.0.2.53/32", "2001:db8::53/128"))) {
+            val plan = checkNotNull(config.ipRoutePlan(bypass))
+            fun tunneled(ip: String): Boolean {
+                val address = checkNotNull(IpRoutePrefix.parse(ip)).address
+                val include = plan.tunnel.filter { it.contains(address) }.maxOfOrNull { it.length } ?: return false
+                val exclude = plan.direct.filter { it.contains(address) }.maxOfOrNull { it.length }
+                return exclude == null || include > exclude
+            }
+            assertTrue(tunneled("192.0.2.53"))
+            assertTrue(tunneled("2001:db8::53"))
+            if (bypass.contains("192.0.2.0/24")) assertFalse(tunneled("192.0.2.54"))
+            if (bypass.contains("2001:db8::/48")) assertFalse(tunneled("2001:db8::54"))
+            assertTrue(tunneled("198.51.100.7"))
+        }
+    }
+
+    @Test
+    fun routingPausePreservesSavedRules() {
+        val context = RuntimeEnvironment.getApplication()
+        val settings = SplitTunnelingSettings(context)
+        settings.preferences.edit().clear().commit()
+        try {
+            settings.setExcluded("com.example.direct", true)
+            settings.addIpRoutes(setOf("192.0.2.0/24"))
+            val original = settings.snapshot()
+            settings.setAppRoutingEnabled(false)
+            assertTrue(settings.snapshot().apps.isEmpty())
+            assertEquals(original.ipRoutes, settings.snapshot().ipRoutes)
+            settings.setIpRoutingEnabled(false)
+            assertEquals(VpnRoutingSettings(emptySet(), emptySet()), settings.snapshot())
+            assertEquals(original.apps, settings.excludedPackages())
+            assertEquals(original.ipRoutes, settings.manualIpRoutes())
+            settings.setAppRoutingEnabled(true)
+            settings.setIpRoutingEnabled(true)
+            assertEquals(original, settings.snapshot())
+        } finally {
+            settings.preferences.edit().clear().commit()
+        }
+    }
+
+    @Test
     fun forwardsAllAwg2OptionsAndNormalizesHeaderRangesForGo() {
         val config = profile(
             """

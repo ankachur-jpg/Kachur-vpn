@@ -72,8 +72,8 @@ internal class VpnNotifications(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             }
-            builder.setDeleteIntent(dismissAction(attempt))
             if (notice.status != VpnNoticeStatus.STOPPING) {
+                builder.setDeleteIntent(dismissAction(attempt))
                 val stop = PendingIntent.getBroadcast(
                     context, attempt.toInt(), Intent(context, VpnNotificationReceiver::class.java)
                         .setAction(ACTION_STOP).putExtra(VpnConnection.EXTRA_ATTEMPT, attempt),
@@ -135,8 +135,8 @@ internal class VpnNotifications(private val context: Context) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setAuthenticationRequired(true)
         }.build()
 
-    private fun dismissAction(attempt: Long): PendingIntent = PendingIntent.getService(
-        context, attempt.toInt(), Intent(context, AwgVpnService::class.java).setAction(ACTION_DISMISS)
+    private fun dismissAction(attempt: Long): PendingIntent = PendingIntent.getBroadcast(
+        context, attempt.toInt(), Intent(context, VpnNotificationReceiver::class.java).setAction(ACTION_DISMISS)
             .putExtra(VpnConnection.EXTRA_ATTEMPT, attempt),
         PendingIntent.FLAG_IMMUTABLE,
     )
@@ -154,8 +154,14 @@ internal class VpnNotifications(private val context: Context) {
 
 class VpnNotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == VpnNotifications.ACTION_STOP) {
-            VpnConnection.stopFromNotification(intent.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L))
+        val attempt = intent.getLongExtra(VpnConnection.EXTRA_ATTEMPT, 0L)
+        when (intent.action) {
+            VpnNotifications.ACTION_STOP -> VpnConnection.stopFromNotification(attempt)
+            VpnNotifications.ACTION_DISMISS -> {
+                if (VpnConnection.ownsAttempt(attempt) && VpnConnection.phase != VpnPhase.STOPPING) {
+                    VpnConnection.refreshNotification()
+                }
+            }
         }
     }
 }

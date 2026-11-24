@@ -29,3 +29,5 @@ done
 [[ "$keys" == *'|com.kachur.vpn|2|'* ]]
 [[ "$keys" != *'|com.kachur.vpn|1|'* ]]
 echo 'Cold restart restored the ordinary control with no foreground VPN notification'
+
+bash .github/scripts/check-release-migration.sh

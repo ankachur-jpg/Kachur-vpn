@@ -19,11 +19,20 @@ internal class NoIncludedVpnAppsException : Exception("No applications remain in
 
 internal fun Config.ipRoutePlan(routes: Set<String>): IpRoutePlan? {
     if (routes.isEmpty()) return null
-    return IpRoutePlan.build(
-        peers.flatMap { peer -> peer.allowedIps.map { IpRoutePrefix.from(it.address.address, it.mask) } },
-        routes.map { checkNotNull(IpRoutePrefix.parse(it)) },
-        nativeExclusion = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-    )
+    val allowed = peers.flatMap { peer -> peer.allowedIps.map { IpRoutePrefix.from(it.address.address, it.mask) } }
+    val bypass = routes.map { checkNotNull(IpRoutePrefix.parse(it)) }
+    val plan = IpRoutePlan.build(allowed, bypass,
+        nativeExclusion = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+    // A DNS server reachable through the peer must not be sent outside by a bypass rule.
+    // Do not expand the peer's AllowedIPs or change the user's configured resolver.
+    val pinned = getInterface().dnsServers
+        .filter { address -> !address.isLoopbackAddress && allowed.any { it.contains(address) } &&
+            bypass.any { it.contains(address) } }
+        .map { IpRoutePrefix.from(it.address, it.address.size * 8) }.toSet()
+    val tunnel = (plan.tunnel + pinned).distinct()
+    val direct = plan.direct.filterNot { it in pinned }
+    if (tunnel.size + direct.size > IpRoutePlan.MAX_ROUTES) throw TooManyVpnRoutesException()
+    return IpRoutePlan(tunnel, direct)
 }
 
 internal fun IpRoutePlan.configure(builder: VpnService.Builder) {

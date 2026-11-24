@@ -20,7 +20,24 @@ internal class SplitTunnelingSettings(context: Context) {
 
     fun ipRoutes(): Set<String> = manualIpRoutes() + preferences.getStringSet(DOWNLOADED_IP_ROUTES, emptySet()).orEmpty()
 
-    fun snapshot() = synchronized(ipSettingsLock) { VpnRoutingSettings(excludedPackages(), ipRoutes()) }
+    fun appRoutingEnabled(): Boolean = preferences.getBoolean("app_routing_enabled", true)
+
+    fun ipRoutingEnabled(): Boolean = preferences.getBoolean("ip_routing_enabled", true)
+
+    fun setAppRoutingEnabled(enabled: Boolean) = synchronized(ipSettingsLock) {
+        preferences.edit().putBoolean("app_routing_enabled", enabled).apply()
+    }
+
+    fun setIpRoutingEnabled(enabled: Boolean) = synchronized(ipSettingsLock) {
+        preferences.edit().putBoolean("ip_routing_enabled", enabled).apply()
+    }
+
+    fun snapshot() = synchronized(ipSettingsLock) {
+        VpnRoutingSettings(
+            if (appRoutingEnabled()) excludedPackages() else emptySet(),
+            if (ipRoutingEnabled()) ipRoutes() else emptySet(),
+        )
+    }
 
     // Only canonical prefixes reach this store. Perform edits on the main thread.
     fun addIpRoutes(routes: Set<String>): Int = synchronized(ipSettingsLock) {

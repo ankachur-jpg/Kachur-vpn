@@ -170,8 +170,8 @@ def parse_bypass_document(data):
             network = ipaddress.ip_network(entry.strip(), strict=False)
         except ValueError as exc:
             raise NetworkError("В JSON найден некорректный IP-адрес или CIDR.") from exc
-        if network.prefixlen == 0 or network.is_multicast or network.is_unspecified:
-            raise NetworkError("Маршрут по умолчанию, multicast и неопределённые адреса запрещены.")
+        if network.prefixlen == 0 or network.is_multicast or network.is_unspecified or network.is_loopback:
+            raise NetworkError("Маршрут по умолчанию, multicast, loopback и неопределённые адреса запрещены.")
         networks[str(network)] = network
     return sorted(
         networks.values(),
@@ -263,7 +263,7 @@ def verify_bypass_routes(networks, uid):
             address += 1
         family = "-6" if network.version == 6 else "-4"
         device_name = route_device(str(address), family=family, uid=uid)
-        if not device_name or device_name == IFACE:
+        if not device_name or device_name in {IFACE, "amn0", "lo"}:
             raise NetworkError(
                 f"Исключение {network} не направляется напрямую через основную таблицу маршрутов."
             )

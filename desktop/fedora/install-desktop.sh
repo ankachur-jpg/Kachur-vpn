@@ -50,8 +50,12 @@ menu_contents = "\n".join([
     "Exec=/usr/bin/bash " + quote_exec_arg(run_script),
     "",
 ])
+autostart_base = [
+    item for item in base
+    if not item.startswith(("Name=", "Comment=", "StartupNotify="))
+]
 autostart_contents = "\n".join([
-    *base,
+    *autostart_base,
     "Name=Kachur VPN — автоподключение",
     "Comment=Запуск Kachur VPN и подключение туннеля при входе в Fedora",
     "Exec=/usr/bin/bash " + quote_exec_arg(run_script) + " --autoconnect",

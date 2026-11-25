@@ -257,13 +257,14 @@ class MainWindow(Adw.ApplicationWindow):
         dialog.close()
         if response != "import":
             return
-        if self.busy or self.current_state.active:
+        if self.busy or self.current_state.active or Path("/sys/class/net/kch0").exists():
             self.message.set_text(
                 "Импорт отменён: сначала отключите Kachur VPN."
             )
             return
         self.busy = True
         self.import_button.set_sensitive(False)
+        self.bypass_import_button.set_sensitive(False)
         self.power.set_sensitive(False)
         self.handshake_button.set_sensitive(False)
         self.message.set_text(
@@ -282,7 +283,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _import_finished(self, error: str) -> bool:
         self.busy = False
-        self.import_button.set_sensitive(True)
+        self.import_button.set_sensitive(not self.current_state.active)
+        self.bypass_import_button.set_sensitive(not self.current_state.active)
         self.power.set_sensitive(True)
         self.message.set_text(
             error if error else
@@ -303,7 +305,7 @@ class MainWindow(Adw.ApplicationWindow):
     def on_bypass_import_clicked(self, *_args: object) -> None:
         if self.busy or self._handshake_check_running:
             return
-        if self.current_state.active:
+        if self.current_state.active or Path("/sys/class/net/kch0").exists():
             self.message.set_text("Сначала отключите Kachur VPN. Список применяется при следующем подключении.")
             return
         chooser = Gtk.FileChooserNative.new(
@@ -350,13 +352,15 @@ class MainWindow(Adw.ApplicationWindow):
         dialog.close()
         if response != "import":
             return
-        if self.busy or self.current_state.active:
+        if self.busy or self.current_state.active or Path("/sys/class/net/kch0").exists():
             self.message.set_text("Импорт отменён: сначала отключите Kachur VPN.")
             return
         self.busy = True
         self.bypass_import_button.set_sensitive(False)
         self.import_button.set_sensitive(False)
+        self.offline_test_button.set_sensitive(False)
         self.power.set_sensitive(False)
+        self.handshake_button.set_sensitive(False)
         self.message.set_text("Проверяем и импортируем JSON. Для записи списка может потребоваться пароль администратора.")
 
         def worker() -> None:
@@ -371,8 +375,9 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _bypass_import_finished(self, error: str, count: int) -> bool:
         self.busy = False
-        self.bypass_import_button.set_sensitive(True)
-        self.import_button.set_sensitive(True)
+        self.bypass_import_button.set_sensitive(not self.current_state.active)
+        self.import_button.set_sensitive(not self.current_state.active)
+        self.offline_test_button.set_sensitive(not self.current_state.active)
         self.power.set_sensitive(True)
         if error:
             self.message.set_text(error)
@@ -459,6 +464,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.offline_test_button.set_sensitive(False)
         self.power.set_sensitive(False)
         self.import_button.set_sensitive(False)
+        self.bypass_import_button.set_sensitive(False)
         self.handshake_button.set_sensitive(False)
         self.connection_button.set_sensitive(False)
         self.message.set_text(

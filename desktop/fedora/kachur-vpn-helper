@@ -199,8 +199,8 @@ def validate_bypass(data: bytes) -> str:
             raise ProfileError(f"Некорректный IP-адрес или CIDR: {entry[:64]}.") from exc
         if network.prefixlen == 0:
             raise ProfileError("Маршрут по умолчанию запрещён: нельзя направить весь трафик мимо VPN.")
-        if network.is_multicast or network.is_unspecified:
-            raise ProfileError("Multicast и неопределённые адреса нельзя добавлять в обход VPN.")
+        if network.is_multicast or network.is_unspecified or network.is_loopback:
+            raise ProfileError("Multicast, loopback и неопределённые адреса нельзя добавлять в обход VPN.")
         networks.add(str(network))
     normalized = sorted(
         networks,

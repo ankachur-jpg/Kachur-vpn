@@ -1,9 +1,9 @@
-name: Build standalone Android phone release
+name: Build standalone Android phone 1.0.2 test
 
 on:
   workflow_dispatch:
   push:
-    branches: [release/mobile-1.0.1]
+    branches: [test/mobile-1.0.2]
 
 jobs:
   build:
@@ -51,17 +51,17 @@ jobs:
         run: bash third_party/amneziawg/build.sh .upstream-awg
 
       - name: Build the unsigned mobile release and the existing phone app
-        run: gradle assembleMobileRelease assembleDebug --stacktrace
+        run: gradle testDebugUnitTest assembleMobileRelease assembleMobileTest assembleDebug --stacktrace
 
       - name: Align and verify production package
         run: |
           set -eu
           tools="$ANDROID_HOME/build-tools/36.0.0"
-          apk=Kachur-VPN-Mobile-1.0.1-unsigned.apk
+          apk=Kachur-VPN-Mobile-1.0.2-unsigned.apk
           "$tools/zipalign" -P 16 -f 4 app/build/outputs/apk/mobileRelease/*-unsigned.apk "$apk"
           "$tools/zipalign" -c -P 16 4 "$apk"
           "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/mobile-badging"
-          grep -F "package: name='com.kachur.vpn.mobile' versionCode='10001' versionName='1.0.1'" "$RUNNER_TEMP/mobile-badging"
+          grep -F "package: name='com.kachur.vpn.mobile' versionCode='10002' versionName='1.0.2'" "$RUNNER_TEMP/mobile-badging"
           grep -F "application-label:'Kachur VPN Mobile'" "$RUNNER_TEMP/mobile-badging"
           if grep -Fxq application-debuggable "$RUNNER_TEMP/mobile-badging"; then exit 1; fi
           for abi in arm64-v8a armeabi-v7a x86 x86_64; do unzip -Z1 "$apk" | grep -Fx "lib/$abi/libwg-go.so"; done
@@ -69,11 +69,28 @@ jobs:
           keytool -genkeypair -noprompt -keystore "$RUNNER_TEMP/check.p12" -storetype PKCS12 -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Emulator only'
           "$tools/apksigner" sign --ks "$RUNNER_TEMP/check.p12" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out "$RUNNER_TEMP/mobile-install-check.apk" "$apk"
 
+      - name: Verify separately installable test APK
+        run: |
+          set -eu
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          cp app/build/outputs/apk/mobileTest/*.apk Kachur-VPN-Mobile-1.0.2-test.apk
+          "$tools/apksigner" verify --verbose --print-certs Kachur-VPN-Mobile-1.0.2-test.apk
+          "$tools/aapt2" dump badging Kachur-VPN-Mobile-1.0.2-test.apk > "$RUNNER_TEMP/test-badging"
+          grep -F "package: name='com.kachur.vpn.mobile.test' versionCode='10002' versionName='1.0.2'" "$RUNNER_TEMP/test-badging"
+          grep -F "application-label:'Kachur VPN Mobile TEST'" "$RUNNER_TEMP/test-badging"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do unzip -Z1 Kachur-VPN-Mobile-1.0.2-test.apk | grep -Fx "lib/$abi/libwg-go.so"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kachur-VPN-Mobile-1.0.2-test
+          path: Kachur-VPN-Mobile-1.0.2-test.apk
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v4
         with:
           name: Kachur-VPN-Mobile-unsigned
           path: |
-            Kachur-VPN-Mobile-1.0.1-unsigned.apk
+            Kachur-VPN-Mobile-1.0.2-unsigned.apk
             apksigner.jar
           if-no-files-found: error
 
@@ -99,3 +116,8 @@ jobs:
             adb shell am start -W -n com.kachur.vpn.mobile/com.kachur.vpn.MainActivity | grep -F 'Status: ok'
             sleep 2
             adb shell pidof com.kachur.vpn.mobile
+            adb install Kachur-VPN-Mobile-1.0.2-test.apk
+            adb shell pm path com.kachur.vpn.mobile.test | grep -F base.apk
+            adb shell am start -W -n com.kachur.vpn.mobile.test/com.kachur.vpn.MainActivity | grep -F 'Status: ok'
+            sleep 2
+            adb shell pidof com.kachur.vpn.mobile.test

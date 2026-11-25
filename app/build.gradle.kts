@@ -10,8 +10,8 @@ android {
         applicationId = "com.kachur.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 10001
-        versionName = "1.0.1"
+        versionCode = 10002
+        versionName = "1.0.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildTypes.getByName("release") {
@@ -22,6 +22,13 @@ android {
         initWith(buildTypes.getByName("release"))
         applicationIdSuffix = ".mobile"
         signingConfig = null
+        matchingFallbacks += listOf("release")
+    }
+    // Side-by-side installation for physical-device testing; never a production upgrade.
+    buildTypes.create("mobileTest") {
+        initWith(buildTypes.getByName("release"))
+        applicationIdSuffix = ".mobile.test"
+        signingConfig = signingConfigs.getByName("debug")
         matchingFallbacks += listOf("release")
     }
     compileOptions {

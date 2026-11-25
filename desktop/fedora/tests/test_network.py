@@ -18,6 +18,47 @@ LOADER.exec_module(network)
 
 
 class NetworkTests(unittest.TestCase):
+
+    def test_bypass_json_parser_normalizes_and_deduplicates(self):
+        networks = network.parse_bypass_document(
+            '{"version":1,"bypass_vpn":["203.0.113.7","1.1.1.1/32","203.0.113.7/32"]}'
+        )
+        self.assertEqual(
+            [str(item) for item in networks],
+            ["1.1.1.1/32", "203.0.113.7/32"],
+        )
+
+    def test_bypass_parser_rejects_default_route(self):
+        with self.assertRaisesRegex(network.NetworkError, "по умолчанию"):
+            network.parse_bypass_document(
+                '{"version":1,"bypass_vpn":["::/0"]}'
+            )
+
+    def test_bypass_rules_are_recorded_before_installation(self):
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "bypass-owned"
+            networks = [
+                ipaddress.ip_network("203.0.113.0/24"),
+                ipaddress.ip_network("2001:db8::/32"),
+            ]
+            with patch.object(network, "BYPASS_OWNED", marker), patch.object(
+                network, "required", return_value=""
+            ) as required:
+                network.add_bypass_rules(networks)
+            self.assertEqual(
+                marker.read_text(encoding="ascii"),
+                '["203.0.113.0/24", "2001:db8::/32"]',
+            )
+        self.assertEqual(
+            [call.args for call in required.call_args_list],
+            [
+                ("ip", "-4", "rule", "add", "pref", "10400", "to",
+                 "203.0.113.0/24", "lookup", "main", "protocol", "242"),
+                ("ip", "-6", "rule", "add", "pref", "10400", "to",
+                 "2001:db8::/32", "lookup", "main", "protocol", "242"),
+            ],
+        )
+
     def test_legacy_table_off_uses_service_routes_and_default_dns(self):
         profile = VALID.decode().replace("DNS = 1.1.1.1, 1.0.0.1", "Table = off")
         profile = profile.replace("PersistentKeepalive = 25", "RekeyAfterTime = 100-120")
@@ -148,6 +189,8 @@ class NetworkTests(unittest.TestCase):
             with patch.object(network, "OWNED", marker), patch.object(
                 network, "CONFIG", config,
             ), patch.object(
+                network, "BYPASS_OWNED", Path(directory) / "bypass-owned",
+            ), patch.object(
                 network, "device", return_value=False,
             ), patch.object(network, "required", return_value=""), patch.object(
                 network, "run", return_value=SimpleNamespace(stdout="")
@@ -170,6 +213,8 @@ class NetworkTests(unittest.TestCase):
             config.write_text("test profile")
             with patch.object(network, "OWNED", Path(directory) / "missing"), patch.object(
                 network, "CONFIG", config,
+            ), patch.object(
+                network, "BYPASS_OWNED", Path(directory) / "bypass-owned",
             ), patch.object(
                 network, "device", return_value=False,
             ), patch.object(

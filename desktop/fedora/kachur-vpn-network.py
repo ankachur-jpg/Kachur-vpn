@@ -350,8 +350,8 @@ def recover_stale_state():
     CONFIG.unlink(missing_ok=True)
 
 
-def install_firewall_bypass(ipv6_tunnel):
-    """Allow only tunnel egress and the encrypted AWG endpoint past stale Amnezia anchors."""
+def install_firewall_bypass(ipv6_tunnel, bypass_networks=(), uid=None):
+    """Allow tunnel egress, listed direct IPs and the encrypted endpoint past stale Amnezia anchors."""
     families = (("-4", "iptables"), ("-6", "ip6tables"))
     positions = {}
     anchor = re.compile(r"(?:^|\s)(?:-j|-g) amnvpn\.anchors(?:\s|$)")
@@ -378,6 +378,17 @@ def install_firewall_bypass(ipv6_tunnel):
         rules = []
         if family == "-4" or ipv6_tunnel:
             rules.append(("-o", IFACE, "-j", "ACCEPT"))
+        version = 4 if family == "-4" else 6
+        for network in bypass_networks:
+            if network.version != version:
+                continue
+            address = network.network_address
+            if network.prefixlen < network.max_prefixlen:
+                address += 1
+            egress = route_device(str(address), family, uid=uid)
+            if not egress or egress in {IFACE, "amn0", "lo"}:
+                raise NetworkError("Не удалось определить физический маршрут для IP-исключения.")
+            rules.append(("-o", egress, "-d", str(network), "-j", "ACCEPT"))
         for address, port in endpoints:
             endpoint_family = "-4" if address.version == 4 else "-6"
             if endpoint_family != family:
@@ -455,7 +466,7 @@ def configure(uid):
              message="AmneziaWG не поднял kch0. Проверьте установленный движок и профиль.")
     required("awg", "set", IFACE, "fwmark", MARK,
              message="Не удалось назначить метку транспорта AWG.")
-    install_firewall_bypass(ipv6)
+    install_firewall_bypass(ipv6, bypass_networks, uid)
     for family in families:
         route = ("default", "dev", IFACE) if family == "-4" or ipv6 else ("unreachable", "default")
         required("ip", family, "route", "add", *route, "table", TABLE, "proto", PROTOCOL,

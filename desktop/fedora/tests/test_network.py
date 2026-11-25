@@ -257,6 +257,29 @@ class NetworkTests(unittest.TestCase):
         ])
         firewall.assert_called_once_with()
 
+    def test_remove_bypass_rules_deletes_only_recorded_routes(self):
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "bypass-owned"
+            marker.write_text('["203.0.113.0/24", "2001:db8::/32"]', encoding="ascii")
+            with patch.object(network, "BYPASS_OWNED", marker), patch.object(
+                network, "run", return_value=SimpleNamespace(returncode=0, stdout="")
+            ) as run, patch.object(network, "required", return_value="") as required:
+                network.remove_bypass_rules()
+            self.assertFalse(marker.exists())
+        self.assertEqual(
+            [call.args for call in run.call_args_list],
+            [
+                ("ip", "-4", "rule", "delete", "pref", "10400", "to",
+                 "203.0.113.0/24", "lookup", "main", "protocol", "242"),
+                ("ip", "-6", "rule", "delete", "pref", "10400", "to",
+                 "2001:db8::/32", "lookup", "main", "protocol", "242"),
+            ],
+        )
+        self.assertEqual(
+            [call.args for call in required.call_args_list],
+            [("ip", "-4", "rule", "show"), ("ip", "-6", "rule", "show")],
+        )
+
     def test_probe_refuses_to_try_https_on_wrong_route(self):
         with patch.object(network, "check_amnezia"), patch.object(network, "load_bypass_networks", return_value=[]), patch.object(network, "device", return_value=True), patch.object(
             network, "route_device", return_value="wlp2s0",

@@ -13,7 +13,8 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 
 from .backend import (
     VPNError, VPNState, check_connection, check_interface, import_profile, pretty_bytes, pretty_handshake,
-    read_state, run_offline_test, switch_tunnel,
+    read_state, run_offline_test, switch_tunnel, import_bypass, read_bypass_networks,
+    amnezia_active,
 )
 
 STYLES = b"""
@@ -43,7 +44,7 @@ def label(text: str, css: str | None = None) -> Gtk.Label:
 
 
 class MainWindow(Adw.ApplicationWindow):
-    def __init__(self, app: Adw.Application) -> None:
+    def __init__(self, app: Adw.Application, auto_connect: bool = False) -> None:
         super().__init__(application=app, title="Kachur VPN", default_width=430, default_height=720)
         self.add_css_class("kachur")
         self.current_state = VPNState(False)
@@ -51,6 +52,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._refresh_running = False
         self._handshake_check_running = False
         self._handshake_checked = False
+        self._auto_connect_enabled = auto_connect
+        self._auto_connect_attempts = 0
 
         toolbar = Adw.ToolbarView()
         header = Adw.HeaderBar()
@@ -127,6 +130,23 @@ class MainWindow(Adw.ApplicationWindow):
             "kachur-subtitle",
         ))
 
+        self.bypass_import_button = Gtk.Button(label="Импортировать список IP (.json)")
+        self.bypass_import_button.connect("clicked", self.on_bypass_import_clicked)
+        body.append(self.bypass_import_button)
+        self.bypass_summary = label("Список обхода VPN: не загружен", "kachur-subtitle")
+        try:
+            self._show_bypass_summary(read_bypass_networks())
+        except VPNError as exc:
+            self.bypass_summary.set_text(str(exc))
+        body.append(self.bypass_summary)
+        body.append(label(
+            "JSON содержит IP-адреса и сети CIDR, которые должны идти напрямую, "
+            "мимо VPN. Остальной трафик идёт через Kachur. Список применяется "
+            "при следующем подключении; импорт доступен только при выключенном VPN.",
+            "kachur-subtitle",
+        ))
+
+
         stats = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         body.append(stats)
         self.rx = self.add_stat(stats, "Получено", "0 Б")
@@ -180,6 +200,8 @@ class MainWindow(Adw.ApplicationWindow):
         ))
         GLib.idle_add(self.refresh)
         GLib.timeout_add_seconds(8, self._tick)
+        if self._auto_connect_enabled:
+            GLib.timeout_add_seconds(12, self._auto_connect_once)
 
     def on_import_clicked(self, *_args: object) -> None:
         if self.busy or self._handshake_check_running:
@@ -266,6 +288,102 @@ class MainWindow(Adw.ApplicationWindow):
             error if error else
             "Профиль импортирован. Он будет использован при следующем подключении."
         )
+        self.refresh()
+        return GLib.SOURCE_REMOVE
+
+
+    def _show_bypass_summary(self, networks: list[str]) -> None:
+        if not networks:
+            self.bypass_summary.set_text("Список обхода VPN: пуст — весь трафик идёт через Kachur.")
+        else:
+            self.bypass_summary.set_text(
+                f"Исключений из VPN: {len(networks)}. Применятся при следующем подключении."
+            )
+
+    def on_bypass_import_clicked(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running:
+            return
+        if self.current_state.active:
+            self.message.set_text("Сначала отключите Kachur VPN. Список применяется при следующем подключении.")
+            return
+        chooser = Gtk.FileChooserNative.new(
+            "Выберите JSON со списком IP для обхода VPN",
+            self,
+            Gtk.FileChooserAction.OPEN,
+            "Выбрать",
+            "Отмена",
+        )
+        file_filter = Gtk.FileFilter()
+        file_filter.set_name("JSON (*.json)")
+        file_filter.add_pattern("*.json")
+        chooser.add_filter(file_filter)
+        chooser.connect("response", self._on_bypass_file_selected)
+        chooser.show()
+
+    def _on_bypass_file_selected(self, chooser: Gtk.FileChooserNative, response: int) -> None:
+        if response != Gtk.ResponseType.ACCEPT:
+            chooser.destroy()
+            return
+        selected = chooser.get_file()
+        path = selected.get_path() if selected is not None else None
+        chooser.destroy()
+        if not path:
+            self.message.set_text("Не удалось прочитать путь выбранного JSON-файла.")
+            return
+        dialog = Adw.MessageDialog.new(
+            self,
+            "Импортировать список IP?",
+            "Новый список заменит предыдущий. IP-адреса и сети CIDR из него "
+            "будут направляться напрямую, в обход Kachur VPN. Маршрут по умолчанию "
+            "и опасные значения будут отклонены.",
+        )
+        dialog.add_response("cancel", "Отмена")
+        dialog.add_response("import", "Импортировать")
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_bypass_import_confirmed, path)
+        dialog.present()
+
+    def _on_bypass_import_confirmed(
+        self, dialog: Adw.MessageDialog, response: str, path: str
+    ) -> None:
+        dialog.close()
+        if response != "import":
+            return
+        if self.busy or self.current_state.active:
+            self.message.set_text("Импорт отменён: сначала отключите Kachur VPN.")
+            return
+        self.busy = True
+        self.bypass_import_button.set_sensitive(False)
+        self.import_button.set_sensitive(False)
+        self.power.set_sensitive(False)
+        self.message.set_text("Проверяем и импортируем JSON. Для записи списка может потребоваться пароль администратора.")
+
+        def worker() -> None:
+            try:
+                count = import_bypass(path)
+                error = ""
+            except VPNError as exc:
+                count, error = 0, str(exc)
+            GLib.idle_add(self._bypass_import_finished, error, count)
+
+        Thread(target=worker, daemon=True).start()
+
+    def _bypass_import_finished(self, error: str, count: int) -> bool:
+        self.busy = False
+        self.bypass_import_button.set_sensitive(True)
+        self.import_button.set_sensitive(True)
+        self.power.set_sensitive(True)
+        if error:
+            self.message.set_text(error)
+        else:
+            self.message.set_text(
+                f"JSON импортирован. Исключений: {count}. Они применятся при следующем подключении."
+            )
+            try:
+                self._show_bypass_summary(read_bypass_networks())
+            except VPNError as exc:
+                self.bypass_summary.set_text(str(exc))
         self.refresh()
         return GLib.SOURCE_REMOVE
 
@@ -363,6 +481,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.busy = False
         self.power.set_sensitive(True)
         self.import_button.set_sensitive(not self.current_state.active)
+        self.bypass_import_button.set_sensitive(not self.current_state.active)
         self.offline_test_button.set_sensitive(not self.current_state.active)
         if report is None:
             self.message.set_text(detail)
@@ -493,23 +612,33 @@ class MainWindow(Adw.ApplicationWindow):
         self.connection_button.set_sensitive(state.active and not self.busy)
         self.offline_test_button.set_sensitive(not state.active and not self.busy)
         self.import_button.set_sensitive(not state.active and not self.busy)
+        self.bypass_import_button.set_sensitive(not state.active and not self.busy)
         return GLib.SOURCE_REMOVE
 
-    def on_toggle(self, *_args: object) -> None:
+    def _start_switch(self, connect: bool, automatic: bool = False) -> None:
         if self.busy or self._handshake_check_running:
+            return
+        if connect and Path("/sys/class/net/kch0").exists():
+            self.message.set_text("Kachur уже подключён.")
+            self.refresh()
+            return
+        if connect and amnezia_active():
+            self.message.set_text("Автоподключение пропущено: сначала отключите AmneziaVPN.")
             return
         try:
             name = check_interface(self.profile.get_text())
         except VPNError as exc:
             self.message.set_text(str(exc))
             return
-        connect = not self.current_state.active
         self.busy = True
         self._handshake_checked = False
         self.power.set_sensitive(False)
         self.handshake_button.set_sensitive(False)
         self.status.set_text("Подключаем…" if connect else "Отключаем…")
-        self.message.set_text("Может появиться системный запрос пароля администратора.")
+        self.message.set_text(
+            "Автоматически подключаем Kachur…" if automatic else
+            "Выполняется операция Kachur. Если правило Polkit установлено, пароль не потребуется."
+        )
 
         def worker() -> None:
             try:
@@ -517,24 +646,57 @@ class MainWindow(Adw.ApplicationWindow):
                 error = ""
             except VPNError as exc:
                 error = str(exc)
-            GLib.idle_add(self._finished, error, connect)
+            GLib.idle_add(self._finished, error, connect, automatic)
 
         Thread(target=worker, daemon=True).start()
 
-    def _finished(self, error: str, connect: bool) -> bool:
+    def _auto_connect_once(self) -> bool:
+        if not self._auto_connect_enabled:
+            return GLib.SOURCE_REMOVE
+        if self.busy or self._refresh_running:
+            GLib.timeout_add_seconds(5, self._auto_connect_once)
+            return GLib.SOURCE_REMOVE
+        if Path("/sys/class/net/kch0").exists():
+            self.message.set_text("Kachur уже подключён. Автоподключение не требуется.")
+            self.refresh()
+            return GLib.SOURCE_REMOVE
+        if amnezia_active():
+            self.message.set_text("Автоподключение Kachur пропущено: AmneziaVPN уже активна.")
+            return GLib.SOURCE_REMOVE
+        if self._auto_connect_attempts >= 3:
+            self.message.set_text("Не удалось автоматически подключить Kachur. Проверьте сеть и профиль.")
+            return GLib.SOURCE_REMOVE
+        self._auto_connect_attempts += 1
+        self._start_switch(True, automatic=True)
+        return GLib.SOURCE_REMOVE
+
+    def on_toggle(self, *_args: object) -> None:
+        if self.busy or self._handshake_check_running:
+            return
+        self._start_switch(not self.current_state.active)
+
+    def _finished(self, error: str, connect: bool, automatic: bool = False) -> bool:
         self.busy = False
         self.power.set_sensitive(True)
-        self.message.set_text(error or (
-            "HTTPS и DNS через Kachur проверены." if connect else
-            "Kachur отключён. При необходимости подключите AmneziaVPN."
-        ))
+        if error and automatic and self._auto_connect_attempts < 3 and not amnezia_active():
+            self.message.set_text(
+                f"Автоподключение не удалось: {error}. Повторим попытку через 20 секунд."
+            )
+            GLib.timeout_add_seconds(20, self._auto_connect_once)
+        else:
+            self.message.set_text(error or (
+                "Kachur автоматически подключён; HTTPS и DNS проверены." if automatic else
+                ("HTTPS и DNS через Kachur проверены." if connect else
+                 "Kachur отключён. При необходимости подключите AmneziaVPN.")
+            ))
         self.refresh()
         return GLib.SOURCE_REMOVE
 
 
 class KachurApp(Adw.Application):
-    def __init__(self) -> None:
+    def __init__(self, auto_connect: bool = False) -> None:
         super().__init__(application_id="com.kachur.vpn.Fedora")
+        self.auto_connect = auto_connect
 
     def do_activate(self) -> None:
         style = Adw.StyleManager.get_default()
@@ -546,9 +708,11 @@ class KachurApp(Adw.Application):
         )
         window = self.props.active_window
         if window is None:
-            window = MainWindow(self)
+            window = MainWindow(self, auto_connect=self.auto_connect)
         window.present()
 
 
 def main() -> None:
-    raise SystemExit(KachurApp().run(sys.argv))
+    auto_connect = "--autoconnect" in sys.argv[1:]
+    argv = [sys.argv[0], *(arg for arg in sys.argv[1:] if arg != "--autoconnect")]
+    raise SystemExit(KachurApp(auto_connect=auto_connect).run(argv))

@@ -50,8 +50,13 @@ jobs:
       - name: Build pinned AmneziaWG Android engine
         run: bash third_party/amneziawg/build.sh .upstream-awg
 
-      - name: Build the unsigned mobile release and the existing phone app
-        run: gradle testDebugUnitTest assembleMobileRelease assembleMobileTest assembleDebug --stacktrace
+      - name: Run Android unit tests using canonical Maven Central
+        env:
+          JAVA_TOOL_OPTIONS: "-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2"
+        run: gradle testDebugUnitTest --stacktrace
+
+      - name: Build mobile release, test APK and existing phone app
+        run: gradle assembleMobileRelease assembleMobileTest assembleDebug --stacktrace
 
       - name: Align and verify production package
         run: |

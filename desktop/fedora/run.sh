@@ -17,4 +17,4 @@ if [[ ${1:-} == --offline-test ]]; then
     exit 0
 fi
 
-exec python3 -m kachur_fedora
+exec python3 -m kachur_fedora "$@"

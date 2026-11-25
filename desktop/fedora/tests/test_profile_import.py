@@ -1,6 +1,7 @@
 """Validation tests for the root-owned profile import helper."""
 import base64
 import importlib.util
+import json
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 import unittest
@@ -31,6 +32,30 @@ PersistentKeepalive = 25
 
 
 class ProfileImportTests(unittest.TestCase):
+
+    def test_bypass_json_accepts_ips_and_cidrs_and_deduplicates(self):
+        data = b'{"version":1,"bypass_vpn":["1.1.1.1","203.0.113.0/24","1.1.1.1/32"]}'
+        normalized = json.loads(helper.validate_bypass(data))
+        self.assertEqual(
+            normalized,
+            {"version": 1, "bypass_vpn": ["1.1.1.1/32", "203.0.113.0/24"]},
+        )
+
+    def test_bypass_json_rejects_default_route(self):
+        data = b'{"version":1,"bypass_vpn":["0.0.0.0/0"]}'
+        with self.assertRaisesRegex(helper.ProfileError, "Маршрут по умолчанию"):
+            helper.validate_bypass(data)
+
+    def test_bypass_json_rejects_invalid_address(self):
+        data = b'{"version":1,"bypass_vpn":["not-an-ip"]}'
+        with self.assertRaisesRegex(helper.ProfileError, "Некорректный IP"):
+            helper.validate_bypass(data)
+
+    def test_bypass_json_rejects_unknown_fields(self):
+        data = b'{"version":1,"bypass_vpn":[],"command":"id"}'
+        with self.assertRaisesRegex(helper.ProfileError, "Ожидаются поля"):
+            helper.validate_bypass(data)
+
     def test_valid_amneziawg_profile_is_accepted(self):
         normalized = helper.validate_profile(VALID)
         self.assertIn("[Interface]", normalized)

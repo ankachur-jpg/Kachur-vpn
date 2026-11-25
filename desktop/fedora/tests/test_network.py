@@ -302,7 +302,7 @@ class NetworkTests(unittest.TestCase):
             network.probe(1000)
 
         self.assertEqual(len(run.call_args_list), 2)
-        self.assertIn("1.0.0.1", run.call_args_list[0].args)
+        self.assertTrue(any("1.0.0.1" in arg for arg in run.call_args_list[0].args))
 
     def test_connect_worker_exits_when_amnezia_appears(self):
         with patch.object(network.os, "geteuid", return_value=0), patch.object(

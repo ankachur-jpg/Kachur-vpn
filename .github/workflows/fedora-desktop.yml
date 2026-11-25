@@ -28,3 +28,4 @@ jobs:
           python3 -m py_compile desktop/fedora/kachur-vpn-helper desktop/fedora/kachur-vpn-network.py
           bash -n desktop/fedora/run.sh
           bash -n desktop/fedora/install-desktop.sh
+          bash -n desktop/fedora/install-polkit.sh

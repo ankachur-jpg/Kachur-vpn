@@ -60,8 +60,10 @@ jobs:
 
       - name: Test and build experimental APK
         env:
-          JAVA_TOOL_OPTIONS: "-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2"
-        run: gradle testDebugUnitTest assembleMobileTest --stacktrace
+          JAVA_TOOL_OPTIONS: "-Drobolectric.dependency.repo.url=https://maven-central.storage-download.googleapis.com/maven2"
+        run: |
+          gradle testDebugUnitTest --stacktrace
+          gradle assembleMobileTest --stacktrace
 
       - name: Verify signed phone APK
         run: |

@@ -46,6 +46,11 @@ class ProfileImportTests(unittest.TestCase):
         with self.assertRaisesRegex(helper.ProfileError, "Маршрут по умолчанию"):
             helper.validate_bypass(data)
 
+    def test_bypass_json_rejects_loopback(self):
+        data = b'{"version":1,"bypass_vpn":["127.0.0.0/8"]}'
+        with self.assertRaisesRegex(helper.ProfileError, "loopback"):
+            helper.validate_bypass(data)
+
     def test_bypass_json_rejects_invalid_address(self):
         data = b'{"version":1,"bypass_vpn":["not-an-ip"]}'
         with self.assertRaisesRegex(helper.ProfileError, "Некорректный IP"):

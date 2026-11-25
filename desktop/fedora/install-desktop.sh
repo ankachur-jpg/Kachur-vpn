@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
 run_script="$script_dir/run.sh"
 
 if [[ ! -f "$run_script" ]]; then
@@ -9,32 +9,34 @@ if [[ ! -f "$run_script" ]]; then
     exit 1
 fi
 
-data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+data_home="\${XDG_DATA_HOME:-$HOME/.local/share}"
+config_home="\${XDG_CONFIG_HOME:-$HOME/.config}"
 applications_dir="$data_home/applications"
+autostart_dir="$config_home/autostart"
 desktop_file="$applications_dir/com.kachur.vpn.Fedora.desktop"
-mkdir -p "$applications_dir"
+autostart_file="$autostart_dir/com.kachur.vpn.Fedora.desktop"
+mkdir -p "$applications_dir" "$autostart_dir"
 
-python3 - "$run_script" "$desktop_file" <<'PY'
+python3 - "$run_script" "$desktop_file" "$autostart_file" <<'PY'
 from pathlib import Path
 import sys
 
 run_script = str(Path(sys.argv[1]).resolve())
 desktop_file = Path(sys.argv[2])
+autostart_file = Path(sys.argv[3])
 
 def quote_exec_arg(value: str) -> str:
-    # Escape characters reserved by the freedesktop Desktop Entry Exec syntax.
     value = value.replace("\\", "\\\\")
-    for char in ('"', "`", "$"):
+    for char in ('"', chr(96), "$"):
         value = value.replace(char, "\\" + char)
     return '"' + value + '"'
 
-contents = "\n".join([
+base = [
     "[Desktop Entry]",
     "Version=1.0",
     "Type=Application",
     "Name=Kachur VPN",
     "Comment=Персональный VPN-клиент для Fedora",
-    "Exec=/usr/bin/bash " + quote_exec_arg(run_script),
     "TryExec=/usr/bin/bash",
     "Icon=network-vpn-symbolic",
     "Terminal=false",
@@ -42,14 +44,31 @@ contents = "\n".join([
     "StartupWMClass=com.kachur.vpn.Fedora",
     "Categories=Network;",
     "Keywords=VPN;AmneziaWG;Kachur;",
+]
+menu_contents = "\n".join([
+    *base,
+    "Exec=/usr/bin/bash " + quote_exec_arg(run_script),
     "",
 ])
-desktop_file.write_text(contents, encoding="utf-8")
+autostart_contents = "\n".join([
+    *base,
+    "Name=Kachur VPN — автоподключение",
+    "Comment=Запуск Kachur VPN и подключение туннеля при входе в Fedora",
+    "Exec=/usr/bin/bash " + quote_exec_arg(run_script) + " --autoconnect",
+    "X-GNOME-Autostart-enabled=true",
+    "X-GNOME-Autostart-Delay=12",
+    "StartupNotify=false",
+    "",
+])
+desktop_file.write_text(menu_contents, encoding="utf-8")
+autostart_file.write_text(autostart_contents, encoding="utf-8")
 desktop_file.chmod(0o644)
+autostart_file.chmod(0o644)
 PY
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$desktop_file"
+    desktop-file-validate "$autostart_file"
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then
@@ -58,4 +77,6 @@ fi
 
 echo "Ярлык Kachur VPN установлен:"
 echo "$desktop_file"
-echo "Откройте меню приложений Fedora и найдите Kachur VPN."
+echo "Автозапуск с автоматическим подключением установлен:"
+echo "$autostart_file"
+echo "Автоподключение выполняется после входа в GNOME; AmneziaVPN не отключается автоматически."

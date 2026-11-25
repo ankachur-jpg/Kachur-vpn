@@ -27,7 +27,8 @@ android {
     // Side-by-side installation for physical-device testing; never a production upgrade.
     buildTypes.create("mobileTest") {
         initWith(buildTypes.getByName("release"))
-        applicationIdSuffix = ".mobile.test"
+        applicationIdSuffix = ".mobile.experiment"
+        versionNameSuffix = "-exp1"
         signingConfig = signingConfigs.getByName("debug")
         matchingFallbacks += listOf("release")
     }

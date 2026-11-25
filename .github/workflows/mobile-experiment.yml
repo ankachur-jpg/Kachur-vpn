@@ -1,0 +1,81 @@
+name: Build experimental Android phone APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/mobile-variable-padding]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Checkout official AmneziaWG Android sources
+        uses: actions/checkout@v4
+        with:
+          repository: amnezia-vpn/amneziawg-android
+          ref: 5c16489e2cd9ed3a0a7a27c7445bba5238132f86
+          submodules: recursive
+          path: .upstream-awg
+          persist-credentials: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 platforms;android-36 build-tools;34.0.0 build-tools;36.0.0 ndk;28.2.13676358 cmake;3.22.1"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: false
+
+      - name: Build pinned AmneziaWG Android engine
+        run: bash third_party/amneziawg/build.sh .upstream-awg
+
+      - name: Test keepalive interoperability with AWG 2.0
+        run: |
+          test_dir=$(mktemp -d "$RUNNER_TEMP/check-awg-XXXXXX")
+          cp .upstream-awg/tunnel/tools/libwg-go/{go.mod,go.sum} third_party/amneziawg/tests/keepalive_test.go "$test_dir/"
+          cd "$test_dir"
+          go mod edit -require=github.com/amnezia-vpn/amneziawg-go@v0.2.18
+          GOTOOLCHAIN=local go test -mod=mod -timeout=45s .
+
+      - name: Test and build experimental APK
+        env:
+          JAVA_TOOL_OPTIONS: "-Drobolectric.dependency.repo.url=https://repo.maven.apache.org/maven2"
+        run: gradle testDebugUnitTest assembleMobileTest --stacktrace
+
+      - name: Verify signed phone APK
+        run: |
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          apk=Kachur-VPN-Mobile-1.0.2-exp1.apk
+          cp app/build/outputs/apk/mobileTest/*.apk "$apk"
+          "$tools/apksigner" verify --verbose "$apk"
+          "$tools/aapt2" dump badging "$apk" > "$RUNNER_TEMP/badging"
+          grep -F "name='com.kachur.vpn.mobile.experiment' versionCode='10002' versionName='1.0.2-exp1'" "$RUNNER_TEMP/badging"
+          grep -F "application-label:'Kachur VPN EXP'" "$RUNNER_TEMP/badging"
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do unzip -Z1 "$apk" | grep -Fx "lib/$abi/libwg-go.so"; done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kachur-VPN-Mobile-1.0.2-exp1
+          path: Kachur-VPN-Mobile-1.0.2-exp1.apk
+          if-no-files-found: error

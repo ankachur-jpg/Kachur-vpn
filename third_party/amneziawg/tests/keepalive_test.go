@@ -56,14 +56,18 @@ func TestKeepaliveRangeIsAppliedByGo(t *testing.T) {
 }
 
 func TestRangedKeepaliveWithAWG2Peer(t *testing.T) {
-	testAWG2Peer(t, "22-35", false)
+	testAWG2Peer(t, "22-35", false, "")
 }
 
 func TestRecoveryHandshakeWithKeepaliveDisabled(t *testing.T) {
-	testAWG2Peer(t, "0", true)
+	testAWG2Peer(t, "0", true, "")
 }
 
-func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool) {
+func TestVariablePaddingWithAWG2Peer(t *testing.T) {
+	testAWG2Peer(t, "0", true, "content_padding_addition=0-64\n")
+}
+
+func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool, clientOptions string) {
 	t.Helper()
 	clientTun := tuntest.NewChannelTUN()
 	serverTun := oldTun.NewChannelTUN()
@@ -74,7 +78,7 @@ func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool) {
 
 	clientKey, serverKey := newKey(t), newKey(t)
 	const awg2 = "s1=15\ns2=18\ns3=20\ns4=25\nh1=101-105\nh2=201-205\nh3=301-305\nh4=401-405\n"
-	apply(t, client, "private_key="+hex.EncodeToString(clientKey.Bytes())+"\n"+awg2)
+	apply(t, client, "private_key="+hex.EncodeToString(clientKey.Bytes())+"\n"+awg2+clientOptions)
 	apply(t, server, "private_key="+hex.EncodeToString(serverKey.Bytes())+"\n"+awg2)
 	if client.Up() != nil || server.Up() != nil {
 		t.Fatal("could not start the test tunnels")

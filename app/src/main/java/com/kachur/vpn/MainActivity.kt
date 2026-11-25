@@ -440,6 +440,17 @@ class MainActivity : KachurActivity() {
             }
             uiAdd(autoRecovery)
             uiAdd(Switch(this@MainActivity).apply {
+                uiSwitch()
+                setText(R.string.variable_padding)
+                isSaveEnabled = false
+                isChecked = splitSettings.variablePaddingEnabled()
+                setOnCheckedChangeListener { _, enabled ->
+                    splitSettings.setVariablePadding(enabled)
+                    renderConnection()
+                }
+            })
+            uiAdd(uiCaption(R.string.variable_padding_note), 6)
+            uiAdd(Switch(this@MainActivity).apply {
                 id = R.id.vpn_control_when_off
                 uiSwitch()
                 setText(R.string.vpn_control_when_off)

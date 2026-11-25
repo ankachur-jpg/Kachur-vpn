@@ -44,7 +44,10 @@ internal fun IpRoutePlan.configure(builder: VpnService.Builder) {
     }
 }
 
-internal fun AwgConfig.toBackendConfig(exclusions: Set<String> = emptySet()): Config {
+internal fun AwgConfig.toBackendConfig(
+    exclusions: Set<String> = emptySet(),
+    variablePadding: Boolean = false,
+): Config {
     val included = includedAppsAfterExclusions(exclusions)
     if (included?.isEmpty() == true) throw NoIncludedVpnAppsException()
     val importedExclusions = interfaceSection["ExcludedApplications"]
@@ -54,15 +57,20 @@ internal fun AwgConfig.toBackendConfig(exclusions: Set<String> = emptySet()): Co
         emptySet()
     }
 
+    val paddingOverride = "0-64"
     return buildString {
         appendLine("[Interface]")
         interfaceSection.appendFields(this) { name, value ->
             when {
+                variablePadding && name == "contentpaddingaddition" -> paddingOverride
                 name in AwgConfigParser.headerFields -> compactRange(value)
                 name == "includedapplications" -> checkNotNull(included).joinToString(", ")
                 name == "excludedapplications" -> disallowed.joinToString(", ")
                 else -> value
             }
+        }
+        if (variablePadding && interfaceSection["ContentPaddingAddition"] == null) {
+            appendLine("ContentPaddingAddition = $paddingOverride")
         }
         if (importedExclusions == null && disallowed.isNotEmpty()) {
             appendLine("ExcludedApplications = ${disallowed.joinToString(", ")}")

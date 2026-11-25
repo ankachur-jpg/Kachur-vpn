@@ -159,7 +159,7 @@ class AwgVpnService : VpnService() {
             val trace = options.startup.takeUnless { reconnecting }
             trace?.mark(VpnStartStage.CONFIG_CHECK)
             report(id, token, R.string.vpn_checking_profile)
-            val config = options.profile.toBackendConfig(options.exclusions)
+            val config = options.profile.toBackendConfig(options.exclusions, options.routing.variablePadding)
             val routePlan = options.routePlan ?: config.ipRoutePlan(options.routing.ipRoutes)
             if (!current(token)) return
             trace?.mark(VpnStartStage.CONFIG_READY)

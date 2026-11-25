@@ -159,6 +159,21 @@ class AwgBackendConfigTest {
     }
 
     @Test
+    fun variablePaddingReachesNativeEngineAndCanBeReverted() {
+        for (original in listOf(null, "0", "4-32")) {
+            val imported = profile(original?.let { "ContentPaddingAddition = $it" } ?: "")
+            val saved = imported.toPortableConfig()
+            for (enabled in listOf(false, true, false)) {
+                val lines = imported.toBackendConfig(variablePadding = enabled).toAwgUserspaceString()
+                    .lineSequence().filter { it.startsWith("content_padding_addition=") }.toList()
+                val expected = if (enabled) "0-64" else original
+                assertEquals(listOfNotNull(expected?.let { "content_padding_addition=$it" }), lines)
+                assertEquals(saved, imported.toPortableConfig())
+            }
+        }
+    }
+
+    @Test
     fun preservesScalarAndRangeKeepaliveForTheGoEngine() {
         val values = mapOf(
             "25" to "25",

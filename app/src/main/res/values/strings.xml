@@ -287,4 +287,6 @@
     <string name="routing_apps_enabled">Маршрутизация по приложениям</string>
     <string name="routing_ip_enabled">Маршрутизация по IP</string>
     <string name="routing_pause_note">Выключите оба переключателя, чтобы временно не применять сохранённые правила. Правила из самого VPN-профиля остаются в силе.</string>
+    <string name="variable_padding">Менять длину пакетов</string>
+    <string name="variable_padding_note">После переподключения AmneziaWG будет добавлять к исходящим пакетам данных от 0 до 64 байт в пределах MTU. Выключите режим и переподключитесь, чтобы вернуться к настройкам профиля.</string>
 </resources>

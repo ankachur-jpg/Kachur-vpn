@@ -378,7 +378,7 @@ internal object VpnConnection {
         check.worker = systemCalls.submit {
             var error: VpnError? = null
             val plan = try {
-                options.profile.toBackendConfig(routing.apps).ipRoutePlan(routing.ipRoutes)
+                options.profile.toBackendConfig(routing.apps, routing.variablePadding).ipRoutePlan(routing.ipRoutes)
             } catch (_: TooManyVpnRoutesException) {
                 error = VpnError(R.string.ip_vpn_route_limit)
                 null

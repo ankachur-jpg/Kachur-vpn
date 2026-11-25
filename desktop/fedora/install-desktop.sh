@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd -- "$(dirname -- "$BASH_SOURCE")" && pwd)"
 run_script="$script_dir/run.sh"
 
 if [[ ! -f "$run_script" ]]; then
@@ -9,8 +9,8 @@ if [[ ! -f "$run_script" ]]; then
     exit 1
 fi
 
-data_home="\${XDG_DATA_HOME:-$HOME/.local/share}"
-config_home="\${XDG_CONFIG_HOME:-$HOME/.config}"
+data_home="$HOME/.local/share"
+config_home="$HOME/.config"
 applications_dir="$data_home/applications"
 autostart_dir="$config_home/autostart"
 desktop_file="$applications_dir/com.kachur.vpn.Fedora.desktop"

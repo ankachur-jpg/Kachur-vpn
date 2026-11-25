@@ -504,7 +504,8 @@ def configure(uid):
 
 def probe(uid):
     check_amnezia()
-    target = select_probe_target(load_bypass_networks())
+    bypass_networks = load_bypass_networks()
+    target = select_probe_target(bypass_networks)
     if not device(IFACE) or route_device(target, uid=uid) != IFACE:
         raise NetworkError("Проверочный IPv4-маршрут не проходит через kch0.")
     https = (
@@ -516,12 +517,34 @@ def probe(uid):
     required(*https, "--resolve", f"{PROBE_HOST}:443:{target}", url, timeout=14,
              message="Тест HTTPS через kch0 не прошёл. Проверьте доступность туннеля.")
     print("HTTPS через kch0: OK.", flush=True)
-    required("resolvectl", "query", "-4", "-i", IFACE, "--cache=no", PROBE_HOST, timeout=8,
-             message="HTTPS работает, но запрос DNS через kch0 не прошёл.")
+    dns_result = required(
+        "resolvectl", "query", "-4", "-i", IFACE, "--cache=no", PROBE_HOST, timeout=8,
+        message="HTTPS работает, но запрос DNS через kch0 не прошёл.",
+    )
     print("DNS через kch0: OK.", flush=True)
-    required(*https, url, timeout=14,
-             message="DNS на kch0 отвечает, но HTTPS по имени через системный DNS не прошёл.")
-    print("HTTPS по имени через системный DNS и kch0: OK.", flush=True)
+    resolved = list(dict.fromkeys(re.findall(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])", dns_result)))
+    if not resolved:
+        raise NetworkError("DNS через kch0 не вернул IPv4-адрес для контрольного имени.")
+    tunnel_address = next(
+        (
+            address for address in resolved
+            if not any(ipaddress.ip_address(address) in network for network in bypass_networks
+                       if network.version == 4)
+        ),
+        None,
+    )
+    if tunnel_address:
+        required(
+            *https, "--resolve", f"{PROBE_HOST}:443:{tunnel_address}", url, timeout=14,
+            message="HTTPS к адресу, полученному через DNS Kachur, не прошёл.",
+        )
+        print("HTTPS к адресу из ответа DNS через kch0: OK.", flush=True)
+    else:
+        print(
+            "Дополнительная HTTPS-проверка пропущена: все адреса контрольного имени "
+            "явно направлены в обход VPN.",
+            flush=True,
+        )
     check_amnezia()
 
 

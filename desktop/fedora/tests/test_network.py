@@ -266,20 +266,43 @@ class NetworkTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_probe_checks_system_dns_with_https_bound_to_tunnel(self):
+        def required(*args, **kwargs):
+            if args[0] == "resolvectl":
+                return "cloudflare-dns.com: 1.1.1.1\n"
+            return ""
+
         with patch.object(network, "check_amnezia"), patch.object(
             network, "load_bypass_networks", return_value=[],
         ), patch.object(network, "device", return_value=True,
         ), patch.object(network, "route_device", return_value="kch0"), patch.object(
-            network, "required",
-        ) as required:
+            network, "required", side_effect=required,
+        ) as run:
             network.probe(1000)
 
-        direct, dns, by_name = (call.args for call in required.call_args_list)
+        direct, dns, by_name = (call.args for call in run.call_args_list)
         self.assertIn("--resolve", direct)
         self.assertEqual(dns[:5], ("resolvectl", "query", "-4", "-i", "kch0"))
         self.assertEqual(by_name[0], "curl")
         self.assertIn("if!kch0", by_name)
-        self.assertNotIn("--resolve", by_name)
+        self.assertIn("--resolve", by_name)
+        self.assertIn("cloudflare-dns.com:443:1.1.1.1", by_name)
+
+    def test_probe_skips_hostname_https_when_dns_answer_is_bypassed(self):
+        def required(*args, **kwargs):
+            if args[0] == "resolvectl":
+                return "cloudflare-dns.com: 1.1.1.1\n"
+            return ""
+
+        with patch.object(network, "check_amnezia"), patch.object(
+            network, "load_bypass_networks",
+            return_value=[ipaddress.ip_network("1.1.1.1/32")],
+        ), patch.object(network, "device", return_value=True), patch.object(
+            network, "route_device", return_value="kch0",
+        ), patch.object(network, "required", side_effect=required) as run:
+            network.probe(1000)
+
+        self.assertEqual(len(run.call_args_list), 2)
+        self.assertIn("1.0.0.1", run.call_args_list[0].args)
 
     def test_connect_worker_exits_when_amnezia_appears(self):
         with patch.object(network.os, "geteuid", return_value=0), patch.object(

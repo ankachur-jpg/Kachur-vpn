@@ -17,13 +17,17 @@ PROFILE = Path("/etc/amnezia/amneziawg/kch0.conf")
 RUNTIME = Path("/run/kachur-vpn")
 CONFIG = RUNTIME / "kch0.conf"
 OWNED = RUNTIME / "owned"
+BYPASS_FILE = Path("/etc/kachur-vpn/bypass.json")
+BYPASS_OWNED = RUNTIME / "bypass-owned"
+MAX_BYPASS_NETWORKS = 100
+BYPASS_PRIORITY = 10400
 UNIT = "kachur-vpn.service"
 TABLE = "51821"
 MARK = "0xca6d"
 PRIORITY = "10501"
 PROTOCOL = "242"
 FIREWALL_CHAIN = "KACHUR_OUT"
-TARGET = "1.1.1.1"
+TARGETS = ("1.1.1.1", "1.0.0.1", "9.9.9.9", "8.8.8.8", "208.67.222.222", "149.112.112.112")
 PROBE_HOST = "cloudflare-dns.com"
 ENV = {"PATH": "/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin", "LC_ALL": "C"}
 RULE = ("pref", PRIORITY, "not", "fwmark", MARK, "lookup", TABLE, "protocol", PROTOCOL)
@@ -119,8 +123,13 @@ def load_profile():
         raise NetworkError("В профиле kch0.conf есть некорректный адрес или DNS.") from exc
 
 
-def reserve(family):
+def reserve(family, bypass_networks=()):
     rules = required("ip", family, "rule", "show", message="Не удалось прочитать правила маршрутизации.")
+    family_version = 4 if family == "-4" else 6
+    bypass_count = sum(network.version == family_version for network in bypass_networks)
+    for index in range(bypass_count):
+        if re.search(rf"^{BYPASS_PRIORITY + index}:", rules, re.MULTILINE):
+            raise NetworkError("Приоритет исключений обхода VPN уже используется.")
     if re.search(rf"^{PRIORITY}:|\blookup {TABLE}(?:\s|$)", rules, re.MULTILINE):
         raise NetworkError("Приоритет или таблица маршрутов Kachur уже используется.")
     if run("ip", family, "route", "show", "table", TABLE).stdout.strip():
@@ -136,6 +145,128 @@ def route_device(address, family="-4", uid=None, mark=None):
     result = required("ip", "-j", family, "route", "get", address, *args,
                       message="Маршрут проверки недоступен.")
     return json.loads(result)[0].get("dev")
+
+
+
+def parse_bypass_document(data):
+    if not data or len(data) > 65536:
+        raise NetworkError("JSON-файл обхода VPN пуст или превышает 64 КиБ.")
+    try:
+        document = json.loads(data)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise NetworkError("Файл обхода VPN содержит некорректный JSON.") from exc
+    if not isinstance(document, dict) or set(document) != {"version", "bypass_vpn"}:
+        raise NetworkError("В JSON ожидаются поля version и bypass_vpn.")
+    if type(document["version"]) is not int or document["version"] != 1:
+        raise NetworkError("Поддерживается только version: 1.")
+    entries = document["bypass_vpn"]
+    if not isinstance(entries, list) or len(entries) > MAX_BYPASS_NETWORKS:
+        raise NetworkError(f"Допускается не более {MAX_BYPASS_NETWORKS} IP-адресов или сетей.")
+    networks = {}
+    for entry in entries:
+        if not isinstance(entry, str) or not entry.strip() or len(entry) > 64:
+            raise NetworkError("Каждый элемент bypass_vpn должен быть IP-адресом или сетью CIDR.")
+        try:
+            network = ipaddress.ip_network(entry.strip(), strict=False)
+        except ValueError as exc:
+            raise NetworkError("В JSON найден некорректный IP-адрес или CIDR.") from exc
+        if network.prefixlen == 0 or network.is_multicast or network.is_unspecified:
+            raise NetworkError("Маршрут по умолчанию, multicast и неопределённые адреса запрещены.")
+        networks[str(network)] = network
+    return sorted(
+        networks.values(),
+        key=lambda network: (
+            network.version, int(network.network_address), network.prefixlen
+        ),
+    )
+
+
+def load_bypass_networks():
+    try:
+        info = BYPASS_FILE.lstat()
+    except FileNotFoundError:
+        return []
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 0
+        or info.st_mode & 0o022
+        or info.st_size > 65536
+    ):
+        raise NetworkError("Файл bypass.json имеет небезопасные права или формат.")
+    try:
+        return parse_bypass_document(BYPASS_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+        raise NetworkError("Не удалось прочитать список обхода VPN.") from exc
+
+
+def add_bypass_rules(networks):
+    if not networks:
+        return
+    # Record the complete intended set before adding the first rule, so the
+    # systemd cleanup hook can remove a partially installed set after failure.
+    BYPASS_OWNED.write_text(
+        json.dumps([str(network) for network in networks]),
+        encoding="ascii",
+    )
+    BYPASS_OWNED.chmod(0o600)
+    for family, version in (("-4", 4), ("-6", 6)):
+        family_networks = [network for network in networks if network.version == version]
+        for index, network in enumerate(family_networks):
+            required(
+                "ip", family, "rule", "add",
+                "pref", str(BYPASS_PRIORITY + index),
+                "to", str(network), "lookup", "main", "protocol", PROTOCOL,
+                message="Не удалось включить исключение IP из VPN.",
+            )
+
+
+def remove_bypass_rules():
+    if not BYPASS_OWNED.exists():
+        return
+    try:
+        networks = parse_bypass_document(json.dumps({
+            "version": 1,
+            "bypass_vpn": json.loads(BYPASS_OWNED.read_text(encoding="ascii")),
+        }))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, NetworkError) as exc:
+        raise NetworkError("Список временных правил обхода повреждён; автоматическое удаление остановлено.") from exc
+    for family, version in (("-4", 4), ("-6", 6)):
+        family_networks = [network for network in networks if network.version == version]
+        for index, network in enumerate(family_networks):
+            run(
+                "ip", family, "rule", "delete",
+                "pref", str(BYPASS_PRIORITY + index),
+                "to", str(network), "lookup", "main", "protocol", PROTOCOL,
+            )
+        rules = required(
+            "ip", family, "rule", "show",
+            message="Не удалось проверить удаление исключений обхода VPN.",
+        )
+        for index in range(len(family_networks)):
+            if re.search(rf"^{BYPASS_PRIORITY + index}:", rules, re.MULTILINE):
+                raise NetworkError("Не удалось полностью удалить исключения обхода VPN.")
+    BYPASS_OWNED.unlink(missing_ok=True)
+
+
+def select_probe_target(networks):
+    for candidate in TARGETS:
+        address = ipaddress.ip_address(candidate)
+        if not any(address.version == network.version and address in network for network in networks):
+            return candidate
+    raise NetworkError("Список обхода VPN перекрывает контрольные IP-адреса. Удалите одно из этих исключений.")
+
+
+def verify_bypass_routes(networks, uid):
+    for network in networks:
+        address = network.network_address
+        if network.prefixlen < network.max_prefixlen:
+            address += 1
+        family = "-6" if network.version == 6 else "-4"
+        device_name = route_device(str(address), family=family, uid=uid)
+        if not device_name or device_name == IFACE:
+            raise NetworkError(
+                f"Исключение {network} не направляется напрямую через основную таблицу маршрутов."
+            )
 
 
 def peer_endpoints():
@@ -212,6 +343,7 @@ def recover_stale_state():
         OWNED.read_text(encoding="ascii").splitlines()
         if OWNED.exists() else ["-4", "-6"]
     )
+    remove_bypass_rules()
     remove_policy_state(families)
     remove_firewall_bypass()
     OWNED.unlink(missing_ok=True)
@@ -296,12 +428,16 @@ def configure(uid):
     # Recover only Kachur's reserved routes, marker and firewall chain.
     recover_stale_state()
     config, dns, ipv6 = load_profile()
+    bypass_networks = load_bypass_networks()
     families = enabled_families()
+    if any(network.version == 6 for network in bypass_networks) and "-6" not in families:
+        raise NetworkError("В JSON есть IPv6-исключения, но IPv6 отключён в Fedora.")
+    target = select_probe_target(bypass_networks)
     ipv6_available = "-6" in families
     if ipv6 and not ipv6_available:
         raise NetworkError("Профиль требует IPv6, но IPv6 отключён на Fedora.")
     for family in families:
-        reserve(family)
+        reserve(family, bypass_networks)
     required("systemctl", "is-active", "--quiet", "systemd-resolved.service",
              message="Для DNS Kachur запустите systemd-resolved.")
     nameservers = re.findall(r"^\s*nameserver\s+(\S+)", Path("/etc/resolv.conf").read_text(), re.MULTILINE)
@@ -324,10 +460,13 @@ def configure(uid):
         route = ("default", "dev", IFACE) if family == "-4" or ipv6 else ("unreachable", "default")
         required("ip", family, "route", "add", *route, "table", TABLE, "proto", PROTOCOL,
                  message="Не удалось добавить маршрут Kachur.")
+    add_bypass_rules(bypass_networks)
+    for family in families:
         required("ip", family, "rule", "add", *RULE,
                  message="Не удалось включить правило маршрутизации Kachur.")
-    if route_device(TARGET, uid=uid) != IFACE:
-        raise NetworkError("Другой маршрут перехватывает тестовый IPv4-адрес.")
+    if route_device(target, uid=uid) != IFACE:
+        raise NetworkError("Другой маршрут перехватывает проверочный IPv4-адрес.")
+    verify_bypass_routes(bypass_networks, uid)
     for address in dns:
         family = "-6" if ":" in address else "-4"
         if route_device(address, family) != IFACE:
@@ -344,7 +483,8 @@ def configure(uid):
 
 def probe(uid):
     check_amnezia()
-    if not device(IFACE) or route_device(TARGET, uid=uid) != IFACE:
+    target = select_probe_target(load_bypass_networks())
+    if not device(IFACE) or route_device(target, uid=uid) != IFACE:
         raise NetworkError("Проверочный IPv4-маршрут не проходит через kch0.")
     https = (
         "curl", "--disable", "--noproxy", "*", "--ipv4", "--interface", f"if!{IFACE}",
@@ -352,7 +492,7 @@ def probe(uid):
         "--max-time", "12", "--output", "/dev/null",
     )
     url = f"https://{PROBE_HOST}/cdn-cgi/trace"
-    required(*https, "--resolve", f"{PROBE_HOST}:443:{TARGET}", url, timeout=14,
+    required(*https, "--resolve", f"{PROBE_HOST}:443:{target}", url, timeout=14,
              message="Тест HTTPS через kch0 не прошёл. Проверьте доступность туннеля.")
     print("HTTPS через kch0: OK.", flush=True)
     required("resolvectl", "query", "-4", "-i", IFACE, "--cache=no", PROBE_HOST, timeout=8,
@@ -377,6 +517,7 @@ def cleanup():
         run("resolvectl", "revert", IFACE)
         run("ip", "link", "delete", "dev", IFACE)
     remove_policy_state(families)
+    remove_bypass_rules()
     if device(IFACE):
         raise NetworkError("Интерфейс kch0 остался после отката. Проверьте журнал службы Kachur.")
     # Amnezia's original OUTPUT anchors were never removed or edited.

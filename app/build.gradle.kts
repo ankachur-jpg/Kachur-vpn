@@ -10,9 +10,16 @@ android {
         applicationId = "com.kachur.vpn"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.1.1-tv"
+        versionCode = 3
+        versionName = "0.1.2-tv"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+    buildTypes.create("tvExperiment") {
+        initWith(buildTypes.getByName("release"))
+        applicationIdSuffix = ".tv.experiment"
+        versionNameSuffix = "-exp1"
+        signingConfig = signingConfigs.getByName("debug")
+        matchingFallbacks += listOf("release")
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

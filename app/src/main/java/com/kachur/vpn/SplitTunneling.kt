@@ -7,7 +7,11 @@ import android.graphics.drawable.Drawable
 import androidx.annotation.StringRes
 import java.text.Collator
 
-internal data class VpnRoutingSettings(val apps: Set<String>, val ipRoutes: Set<String>)
+internal data class VpnRoutingSettings(
+    val apps: Set<String>,
+    val ipRoutes: Set<String>,
+    val variablePadding: Boolean = false,
+)
 
 internal class SplitTunnelingSettings(context: Context) {
     internal val preferences = context.applicationContext.getSharedPreferences("split_tunneling", Context.MODE_PRIVATE)
@@ -20,7 +24,31 @@ internal class SplitTunnelingSettings(context: Context) {
 
     fun ipRoutes(): Set<String> = manualIpRoutes() + preferences.getStringSet(DOWNLOADED_IP_ROUTES, emptySet()).orEmpty()
 
-    fun snapshot() = synchronized(ipSettingsLock) { VpnRoutingSettings(excludedPackages(), ipRoutes()) }
+    fun appRoutingEnabled(): Boolean = preferences.getBoolean("app_routing_enabled", true)
+
+    fun ipRoutingEnabled(): Boolean = preferences.getBoolean("ip_routing_enabled", true)
+
+    fun variablePaddingEnabled(): Boolean = preferences.getBoolean("variable_padding", false)
+
+    fun setVariablePadding(enabled: Boolean) = synchronized(ipSettingsLock) {
+        preferences.edit().putBoolean("variable_padding", enabled).apply()
+    }
+
+    fun setAppRoutingEnabled(enabled: Boolean) = synchronized(ipSettingsLock) {
+        preferences.edit().putBoolean("app_routing_enabled", enabled).apply()
+    }
+
+    fun setIpRoutingEnabled(enabled: Boolean) = synchronized(ipSettingsLock) {
+        preferences.edit().putBoolean("ip_routing_enabled", enabled).apply()
+    }
+
+    fun snapshot() = synchronized(ipSettingsLock) {
+        VpnRoutingSettings(
+            if (appRoutingEnabled()) excludedPackages() else emptySet(),
+            if (ipRoutingEnabled()) ipRoutes() else emptySet(),
+            variablePaddingEnabled(),
+        )
+    }
 
     // Only canonical prefixes reach this store. Perform edits on the main thread.
     fun addIpRoutes(routes: Set<String>): Int = synchronized(ipSettingsLock) {

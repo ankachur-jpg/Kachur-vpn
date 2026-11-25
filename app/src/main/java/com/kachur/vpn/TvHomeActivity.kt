@@ -8,6 +8,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 
 /**
@@ -17,6 +18,11 @@ import android.widget.TextView
 class TvHomeActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var autoStart: Button
+    private val tunnelSettings by lazy { SplitTunnelingSettings(applicationContext) }
+    private lateinit var variablePadding: Switch
+    private lateinit var routeApps: Switch
+    private lateinit var routeIps: Switch
+    private lateinit var reconnect: Button
     private val observer: () -> Unit = { updateStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,6 +55,19 @@ class TvHomeActivity : Activity() {
                 topMargin = dp(14)
             })
         }
+        fun toggle(id: Int, title: Int, onToggle: (Boolean) -> Unit) = Switch(this).apply {
+            this.id = id
+            setText(title)
+            setTextColor(0xffffffff.toInt())
+            textSize = 20f
+            isFocusable = true
+            isSaveEnabled = false
+            setOnClickListener {
+                onToggle(isChecked)
+                updateStatus()
+            }
+            root.addView(this, LinearLayout.LayoutParams(dp(420), dp(72)))
+        }
         val open = action("Подключить VPN") {
             startActivity(VpnQuickActivity.intent(this))
         }
@@ -68,6 +87,13 @@ class TvHomeActivity : Activity() {
         }
         root.addView(label("VPN включается после загрузки приставки.\nСначала выберите профиль и один раз разрешите VPN.", 16f),
             LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+        variablePadding = toggle(R.id.tv_variable_padding, R.string.variable_padding, tunnelSettings::setVariablePadding)
+        root.addView(label(getString(R.string.variable_padding_note), 16f))
+        routeApps = toggle(R.id.tv_route_apps, R.string.routing_apps_enabled, tunnelSettings::setAppRoutingEnabled)
+        routeIps = toggle(R.id.tv_route_ips, R.string.routing_ip_enabled, tunnelSettings::setIpRoutingEnabled)
+        reconnect = action(getString(R.string.split_apply_reconnect)) {
+            VpnConnection.reconnectWithSavedExclusions(applicationContext)
+        }
         action("Настройки и профили") {
             startActivity(Intent(this, MainActivity::class.java))
         }
@@ -91,6 +117,11 @@ class TvHomeActivity : Activity() {
 
     private fun updateStatus() {
         status.text = getString(VpnConnection.message)
+        variablePadding.isChecked = tunnelSettings.variablePaddingEnabled()
+        routeApps.isChecked = tunnelSettings.appRoutingEnabled()
+        routeIps.isChecked = tunnelSettings.ipRoutingEnabled()
+        reconnect.visibility = if (VpnConnection.routingNeedsReconnect(this)) View.VISIBLE else View.GONE
+        reconnect.isEnabled = !VpnConnection.checkingRoutes
         val settings = VpnLaunchSettings(applicationContext)
         autoStart.text = if (settings.enabled) "Автоподключение: включено" else "Автоподключение: выключено"
     }

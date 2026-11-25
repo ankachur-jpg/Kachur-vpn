@@ -56,14 +56,18 @@ func TestKeepaliveRangeIsAppliedByGo(t *testing.T) {
 }
 
 func TestRangedKeepaliveWithAWG2Peer(t *testing.T) {
-	testAWG2Peer(t, "22-35", false)
+	testAWG2Peer(t, "22-35", false, "")
 }
 
 func TestRecoveryHandshakeWithKeepaliveDisabled(t *testing.T) {
-	testAWG2Peer(t, "0", true)
+	testAWG2Peer(t, "0", true, "")
 }
 
-func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool) {
+func TestVariablePaddingWithAWG2Peer(t *testing.T) {
+	testAWG2Peer(t, "0", true, "content_padding_addition=0-64\n")
+}
+
+func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool, clientOptions string) {
 	t.Helper()
 	clientTun := tuntest.NewChannelTUN()
 	serverTun := oldTun.NewChannelTUN()
@@ -74,7 +78,7 @@ func testAWG2Peer(t *testing.T, keepalive string, initiateHandshake bool) {
 
 	clientKey, serverKey := newKey(t), newKey(t)
 	const awg2 = "s1=15\ns2=18\ns3=20\ns4=25\nh1=101-105\nh2=201-205\nh3=301-305\nh4=401-405\n"
-	apply(t, client, "private_key="+hex.EncodeToString(clientKey.Bytes())+"\n"+awg2)
+	apply(t, client, "private_key="+hex.EncodeToString(clientKey.Bytes())+"\n"+awg2+clientOptions)
 	apply(t, server, "private_key="+hex.EncodeToString(serverKey.Bytes())+"\n"+awg2)
 	if client.Up() != nil || server.Up() != nil {
 		t.Fatal("could not start the test tunnels")
@@ -123,18 +127,24 @@ func checkDelivery(t *testing.T, packet []byte, outbound chan<- []byte, inbound 
 	t.Helper()
 	timer := time.NewTimer(8 * time.Second)
 	defer timer.Stop()
-	select {
-	case outbound <- packet:
-	case <-timer.C:
-		t.Fatal("test tunnel did not accept a packet")
-	}
-	select {
-	case received := <-inbound:
-		if !bytes.Equal(received, packet) {
-			t.Fatal("test tunnel changed a packet")
+	// A UDP probe can be lost while the peers establish their first session.
+	retry := time.NewTicker(300 * time.Millisecond)
+	defer retry.Stop()
+	send := outbound
+	for {
+		select {
+		case send <- bytes.Clone(packet):
+			send = nil
+		case <-retry.C:
+			send = outbound
+		case received := <-inbound:
+			if !bytes.Equal(received, packet) {
+				t.Fatal("test tunnel changed a packet")
+			}
+			return
+		case <-timer.C:
+			t.Fatal("test tunnel did not deliver a packet")
 		}
-	case <-timer.C:
-		t.Fatal("test tunnel did not deliver a packet")
 	}
 }
 

@@ -43,6 +43,23 @@ class SplitTunnelingActivity : KachurActivity() {
         val header = uiColumn(18)
         header.uiAdd(uiHeader(R.string.split_title) { finish() })
         header.uiAdd(uiCaption(R.string.split_description), 12)
+        header.uiAdd(Switch(this).apply {
+            setText(R.string.routing_apps_enabled)
+            isChecked = settings.appRoutingEnabled()
+            setOnCheckedChangeListener { _, enabled ->
+                settings.setAppRoutingEnabled(enabled)
+                renderReconnect()
+            }
+        }, 8)
+        header.uiAdd(Switch(this).apply {
+            setText(R.string.routing_ip_enabled)
+            isChecked = settings.ipRoutingEnabled()
+            setOnCheckedChangeListener { _, enabled ->
+                settings.setIpRoutingEnabled(enabled)
+                renderReconnect()
+            }
+        }, 8)
+        header.uiAdd(uiCaption(R.string.routing_pause_note), 8)
         header.uiAdd(uiButton(R.string.ip_title, primary = true).apply {
             id = R.id.ip_open_button
             setOnClickListener { startActivity(Intent(this@SplitTunnelingActivity, IpRoutesActivity::class.java)) }

@@ -61,9 +61,37 @@ class TvHomeActivityTest {
             val content = controller.get().findViewById<ViewGroup>(android.R.id.content)
             val scroll = content.getChildAt(0) as ScrollView
             val buttons = descendants(scroll).filterIsInstance<Button>().toList()
-            assertEquals(5, buttons.size)
+            assertEquals(9, buttons.size)
             assertTrue(scroll.isFillViewport)
             assertTrue(buttons.all { it.isFocusable })
+        }
+    }
+
+    @Test
+    fun remoteSwitchesPersistAndRestoreTheRoutingSelection() {
+        val settings = SplitTunnelingSettings(RuntimeEnvironment.getApplication())
+        settings.preferences.edit().clear().commit()
+        try {
+            settings.setExcluded("com.example.tv", true)
+            settings.addIpRoutes(setOf("192.0.2.0/24"))
+            Robolectric.buildActivity(TvHomeActivity::class.java).setup().use { controller ->
+                fun toggle(id: Int) = controller.get().findViewById<android.widget.Switch>(id)
+                val initial = settings.snapshot()
+                for (id in listOf(R.id.tv_variable_padding, R.id.tv_route_apps, R.id.tv_route_ips)) {
+                    toggle(id).performClick()
+                }
+                assertEquals(VpnRoutingSettings(emptySet(), emptySet(), true), settings.snapshot())
+                controller.recreate()
+                assertTrue(toggle(R.id.tv_variable_padding).isChecked)
+                assertFalse(toggle(R.id.tv_route_apps).isChecked)
+                assertFalse(toggle(R.id.tv_route_ips).isChecked)
+                for (id in listOf(R.id.tv_variable_padding, R.id.tv_route_apps, R.id.tv_route_ips)) {
+                    toggle(id).performClick()
+                }
+                assertEquals(initial, settings.snapshot())
+            }
+        } finally {
+            settings.preferences.edit().clear().commit()
         }
     }
 

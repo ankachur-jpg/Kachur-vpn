@@ -43,7 +43,6 @@ class AwgVpnService : VpnService() {
         renderNotification()
     }
     private var foreground = false
-    @Volatile private var notificationDismissed = false
     private var lastNotice: VpnNotice? = null
     private var lastNoticeRevision = VpnConnection.notificationRevision
     private var connectedAt = 0L
@@ -67,7 +66,7 @@ class AwgVpnService : VpnService() {
         val action = intent?.action
         if (action == VpnNotifications.ACTION_STOP || action == VpnNotifications.ACTION_DISMISS) {
             if (id != 0L && id == attempt && VpnConnection.ownsAttempt(id)) {
-                if (action == VpnNotifications.ACTION_STOP) VpnConnection.stopFromNotification(id) else notificationDismissed = true
+                if (action == VpnNotifications.ACTION_STOP) VpnConnection.stopFromNotification(id)
             } else if (attempt == 0L) {
                 serviceCalls.execute { stopPlatformService(0L, startId) }
             }
@@ -160,7 +159,7 @@ class AwgVpnService : VpnService() {
             val trace = options.startup.takeUnless { reconnecting }
             trace?.mark(VpnStartStage.CONFIG_CHECK)
             report(id, token, R.string.vpn_checking_profile)
-            val config = options.profile.toBackendConfig(options.exclusions)
+            val config = options.profile.toBackendConfig(options.exclusions, options.routing.variablePadding)
             val routePlan = options.routePlan ?: config.ipRoutePlan(options.routing.ipRoutes)
             if (!current(token)) return
             trace?.mark(VpnStartStage.CONFIG_READY)
@@ -301,7 +300,7 @@ class AwgVpnService : VpnService() {
             VpnNotice(state, country, detail, profileName = profileName)
         }
         val revision = VpnConnection.notificationRevision
-        if (!foreground || notificationDismissed || (lastNotice == notice && lastNoticeRevision == revision)) return
+        if (!foreground || (lastNotice == notice && lastNoticeRevision == revision)) return
         lastNotice = notice
         lastNoticeRevision = revision
         queueNotice(notice, id)
@@ -309,7 +308,7 @@ class AwgVpnService : VpnService() {
 
     private fun queueNotice(notice: VpnNotice, id: Long) {
         serviceCalls.execute {
-            if (destroyed || notificationDismissed || (closing && notice.status != VpnNoticeStatus.STOPPING)) return@execute
+            if (destroyed || (closing && notice.status != VpnNoticeStatus.STOPPING)) return@execute
             try {
                 notifications.update(notice, id)
             } catch (_: RuntimeException) {

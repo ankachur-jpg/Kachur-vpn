@@ -47,4 +47,7 @@
     <item type="id" name="ip_update_add" />
     <item type="id" name="ip_update_now" />
     <item type="id" name="ip_update_status" />
+    <item type="id" name="tv_variable_padding" />
+    <item type="id" name="tv_route_apps" />
+    <item type="id" name="tv_route_ips" />
 </resources>

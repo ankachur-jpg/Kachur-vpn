@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from kachur_fedora.backend import (
     VPNError, check_interface, import_profile, parse_handshakes, parse_transfer,
-    pretty_bytes, read_state, run_offline_test, switch_tunnel,
+    pretty_bytes, read_state, run_offline_test, switch_tunnel, import_bypass,
 )
 
 
@@ -46,6 +46,33 @@ class BackendTests(unittest.TestCase):
         self.assertEqual(state.last_handshake, 0)
         tool.assert_not_called()
         run.assert_not_called()
+
+
+    @patch("kachur_fedora.backend._run")
+    @patch("kachur_fedora.backend._tool", return_value="/usr/bin/pkexec")
+    @patch("kachur_fedora.backend.Path.is_file", return_value=True)
+    @patch(
+        "kachur_fedora.backend.Path.stat",
+        return_value=Mock(st_mode=0o100755),
+    )
+    def test_import_bypass_uses_fixed_polkit_helper(
+        self, stat_result, is_file, tool, run
+    ):
+        run.return_value = Mock(returncode=0)
+        with patch(
+            "kachur_fedora.backend.read_bypass_networks",
+            return_value=["1.1.1.1/32", "203.0.113.0/24"],
+        ):
+            self.assertEqual(import_bypass("/tmp/bypass.json"), 2)
+        self.assertEqual(
+            run.call_args.args[0],
+            [
+                "/usr/bin/pkexec",
+                "/usr/local/libexec/kachur-vpn-helper",
+                "import-bypass",
+                "/tmp/bypass.json",
+            ],
+        )
 
     @patch(
         "kachur_fedora.backend._tool",

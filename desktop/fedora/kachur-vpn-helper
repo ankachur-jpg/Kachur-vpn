@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import ipaddress
+import json
 import os
 from pathlib import Path
 import re
@@ -20,6 +21,10 @@ DEST_DIR = Path("/etc/amnezia/amneziawg")
 DEST_FILE = DEST_DIR / "kch0.conf"
 BACKUP_FILE = DEST_DIR / "kch0.conf.backup"
 MAX_PROFILE_SIZE = 64 * 1024
+BYPASS_DIR = Path("/etc/kachur-vpn")
+BYPASS_FILE = BYPASS_DIR / "bypass.json"
+BYPASS_BACKUP_FILE = BYPASS_DIR / "bypass.json.backup"
+MAX_BYPASS_NETWORKS = 100
 
 INTERFACE_KEYS = {
     "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "FwMark",
@@ -168,6 +173,50 @@ def validate_profile(data: bytes) -> str:
     return normalized
 
 
+
+def validate_bypass(data: bytes) -> str:
+    """Validate a JSON list of IPs/CIDRs that must bypass the VPN."""
+    if not data or len(data) > MAX_PROFILE_SIZE:
+        raise ProfileError("JSON-файл пуст или превышает размер 64 КиБ.")
+    try:
+        document = json.loads(data.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProfileError("JSON должен быть корректным UTF-8 документом.") from exc
+    if not isinstance(document, dict) or set(document) != {"version", "bypass_vpn"}:
+        raise ProfileError("Ожидаются поля version и bypass_vpn.")
+    if type(document["version"]) is not int or document["version"] != 1:
+        raise ProfileError("Поддерживается только version: 1.")
+    entries = document["bypass_vpn"]
+    if not isinstance(entries, list) or len(entries) > MAX_BYPASS_NETWORKS:
+        raise ProfileError(f"bypass_vpn должен быть списком не более чем из {MAX_BYPASS_NETWORKS} адресов.")
+    networks = set()
+    for entry in entries:
+        if not isinstance(entry, str) or not entry.strip() or len(entry) > 64:
+            raise ProfileError("Каждый элемент bypass_vpn должен быть IP-адресом или сетью CIDR.")
+        try:
+            network = ipaddress.ip_network(entry.strip(), strict=False)
+        except ValueError as exc:
+            raise ProfileError(f"Некорректный IP-адрес или CIDR: {entry[:64]}.") from exc
+        if network.prefixlen == 0:
+            raise ProfileError("Маршрут по умолчанию запрещён: нельзя направить весь трафик мимо VPN.")
+        if network.is_multicast or network.is_unspecified:
+            raise ProfileError("Multicast и неопределённые адреса нельзя добавлять в обход VPN.")
+        networks.add(str(network))
+    normalized = sorted(
+        networks,
+        key=lambda item: (
+            ipaddress.ip_network(item).version,
+            int(ipaddress.ip_network(item).network_address),
+            ipaddress.ip_network(item).prefixlen,
+        ),
+    )
+    return json.dumps(
+        {"version": 1, "bypass_vpn": normalized},
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+
+
 def _read_source(path: str) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -186,10 +235,10 @@ def _read_source(path: str) -> bytes:
     return data
 
 
-def _atomic_write(path: Path, data: bytes) -> None:
+def _atomic_write(path: Path, data: bytes, mode: int = 0o600) -> None:
     fd, temporary = tempfile.mkstemp(prefix=".kachur-import-", dir=str(path.parent))
     try:
-        os.fchmod(fd, 0o600)
+        os.fchmod(fd, mode)
         os.fchown(fd, 0, 0)
         with os.fdopen(fd, "wb", closefd=True) as stream:
             stream.write(data)
@@ -197,7 +246,7 @@ def _atomic_write(path: Path, data: bytes) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         os.chown(path, 0, 0)
-        os.chmod(path, 0o600)
+        os.chmod(path, mode)
         directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
             os.fsync(directory_fd)
@@ -238,16 +287,45 @@ def import_profile(source_path: str) -> None:
     _atomic_write(DEST_FILE, normalized)
 
 
+
+def import_bypass(source_path: str) -> None:
+    if os.geteuid() != 0:
+        raise ProfileError("Помощник должен запускаться через Polkit.")
+    normalized = validate_bypass(_read_source(source_path)).encode("utf-8")
+    BYPASS_DIR.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if BYPASS_DIR.is_symlink() or not stat.S_ISDIR(BYPASS_DIR.lstat().st_mode):
+        raise ProfileError("Каталог списков обхода не является обычным каталогом.")
+    os.chown(BYPASS_DIR, 0, 0)
+    os.chmod(BYPASS_DIR, 0o755)
+    if BYPASS_FILE.exists() or BYPASS_FILE.is_symlink():
+        info = BYPASS_FILE.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != 0:
+            raise ProfileError("Текущий список обхода небезопасен; импорт остановлен.")
+        old_data = BYPASS_FILE.read_bytes()
+        if len(old_data) > MAX_PROFILE_SIZE:
+            raise ProfileError("Текущий список обхода слишком велик.")
+        _atomic_write(BYPASS_BACKUP_FILE, old_data, mode=0o644)
+    _atomic_write(BYPASS_FILE, normalized, mode=0o644)
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 3 or argv[1] != "import-profile":
-        print("Использование: kachur-vpn-helper import-profile ПУТЬ_К_CONF", file=sys.stderr)
+    if len(argv) != 3 or argv[1] not in {"import-profile", "import-bypass"}:
+        print(
+            "Использование: kachur-vpn-helper import-profile ПУТЬ_К_CONF "
+            "или import-bypass ПУТЬ_К_JSON",
+            file=sys.stderr,
+        )
         return 2
     try:
-        import_profile(argv[2])
+        if argv[1] == "import-profile":
+            import_profile(argv[2])
+            print("Профиль Kachur VPN импортирован. Права доступа: root-only (600).")
+        else:
+            import_bypass(argv[2])
+            print("Список IP для обхода VPN импортирован.")
     except (ProfileError, OSError) as exc:
         print(f"Импорт не выполнен: {exc}", file=sys.stderr)
         return 1
-    print("Профиль Kachur VPN импортирован. Права доступа: root-only (600).")
     return 0
 
 

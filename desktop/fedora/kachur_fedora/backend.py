@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 import re
 import shutil
@@ -18,6 +19,7 @@ import os
 _VALID_IFACE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,14}$")
 _NETWORK_HELPER = Path("/usr/local/libexec/kachur-vpn-network")
 _IMPORT_HELPER = Path("/usr/local/libexec/kachur-vpn-helper")
+_BYPASS_FILE = Path("/etc/kachur-vpn/bypass.json")
 
 
 class VPNError(RuntimeError):
@@ -147,6 +149,48 @@ def import_profile(source_path: str) -> None:
             "Импорт не выполнен. Проверьте формат AmneziaWG .conf; опасные директивы "
             "и команды в конфигурации запрещены."
         )
+
+
+
+def import_bypass(source_path: str) -> int:
+    """Import a validated IP/CIDR bypass list through the fixed root helper."""
+    if not _IMPORT_HELPER.is_file() or not _IMPORT_HELPER.stat().st_mode & 0o111:
+        raise VPNError("Помощник безопасного импорта не установлен. Обновите Kachur VPN для Fedora.")
+    result = _run(
+        [_tool("pkexec"), str(_IMPORT_HELPER), "import-bypass", str(Path(source_path).absolute())],
+        timeout=45,
+    )
+    if result.returncode:
+        raise VPNError(
+            "Импорт JSON не выполнен. Проверьте формат: version 1 и список bypass_vpn с IP/CIDR."
+        )
+    return len(read_bypass_networks())
+
+
+def read_bypass_networks() -> list[str]:
+    """Read the public, root-owned list for display in the unprivileged UI."""
+    try:
+        document = json.loads(_BYPASS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VPNError("Не удалось прочитать сохранённый список обхода VPN.") from exc
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"version", "bypass_vpn"}
+        or type(document["version"]) is not int
+        or document["version"] != 1
+        or not isinstance(document["bypass_vpn"], list)
+        or len(document["bypass_vpn"]) > 100
+        or any(not isinstance(item, str) for item in document["bypass_vpn"])
+    ):
+        raise VPNError("Сохранённый список обхода VPN имеет неверный формат.")
+    return document["bypass_vpn"]
+
+
+def amnezia_active() -> bool:
+    """Return whether the separate AmneziaVPN interface is present."""
+    return (Path("/sys/class/net") / "amn0").exists()
 
 
 def _network_action(action: str) -> None:

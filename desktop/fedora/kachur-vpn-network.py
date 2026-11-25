@@ -248,6 +248,15 @@ def remove_bypass_rules():
     BYPASS_OWNED.unlink(missing_ok=True)
 
 
+
+def ensure_dns_not_bypassed(networks, dns):
+    for address in dns:
+        ip = ipaddress.ip_address(address)
+        if any(ip.version == network.version and ip in network for network in networks):
+            raise NetworkError(
+                f"DNS-сервер {ip} включён в обход VPN. Удалите его из JSON-исключений."
+            )
+
 def select_probe_target(networks):
     for candidate in TARGETS:
         address = ipaddress.ip_address(candidate)
@@ -440,6 +449,7 @@ def configure(uid):
     recover_stale_state()
     config, dns, ipv6 = load_profile()
     bypass_networks = load_bypass_networks()
+    ensure_dns_not_bypassed(bypass_networks, dns)
     families = enabled_families()
     if any(network.version == 6 for network in bypass_networks) and "-6" not in families:
         raise NetworkError("В JSON есть IPv6-исключения, но IPv6 отключён в Fedora.")

@@ -98,7 +98,9 @@ class NetworkTests(unittest.TestCase):
             network, "peer_endpoints",
             return_value=[(ipaddress.ip_address("48.102.252.233"), 37649)],
         ), patch.object(network, "route_device", return_value="wlp2s0"):
-            network.install_firewall_bypass(False)
+            network.install_firewall_bypass(
+                False, [ipaddress.ip_network("203.0.113.0/24")], 1000
+            )
 
         commands = [call.args for call in req.call_args_list]
         self.assertIn(

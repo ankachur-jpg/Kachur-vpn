@@ -142,13 +142,19 @@ class NetworkTests(unittest.TestCase):
     def test_cleanup_removes_policy_even_when_tun_disappeared(self):
         with TemporaryDirectory() as directory:
             marker = Path(directory) / "owned"
+            config = Path(directory) / "kch0.conf"
             marker.write_text("-4\n-6")
+            config.write_text("test profile")
             with patch.object(network, "OWNED", marker), patch.object(
+                network, "CONFIG", config,
+            ), patch.object(
                 network, "device", return_value=False,
             ), patch.object(network, "required", return_value=""), patch.object(
                 network, "run", return_value=SimpleNamespace(stdout="")
             ) as run, patch.object(network, "remove_firewall_bypass"):
                 network.cleanup()
+                self.assertFalse(marker.exists())
+                self.assertFalse(config.exists())
                 self.assertEqual([call.args for call in run.call_args_list], [
                     ("ip", "-4", "rule", "delete", *network.RULE),
                     ("ip", "-4", "route", "flush", "table", network.TABLE, "proto", network.PROTOCOL),
@@ -160,7 +166,11 @@ class NetworkTests(unittest.TestCase):
 
     def test_cleanup_recovers_reserved_routes_without_ownership_marker(self):
         with TemporaryDirectory() as directory:
+            config = Path(directory) / "kch0.conf"
+            config.write_text("test profile")
             with patch.object(network, "OWNED", Path(directory) / "missing"), patch.object(
+                network, "CONFIG", config,
+            ), patch.object(
                 network, "device", return_value=False,
             ), patch.object(
                 network, "run", return_value=SimpleNamespace(returncode=0, stdout="")
@@ -168,6 +178,7 @@ class NetworkTests(unittest.TestCase):
                 network, "required", return_value=""
             ), patch.object(network, "remove_firewall_bypass") as firewall:
                 network.cleanup()
+            self.assertFalse(config.exists())
 
         self.assertEqual([call.args for call in run.call_args_list], [
             ("ip", "-4", "rule", "delete", *network.RULE),

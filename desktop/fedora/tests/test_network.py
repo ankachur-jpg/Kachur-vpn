@@ -28,6 +28,21 @@ class NetworkTests(unittest.TestCase):
             ["1.1.1.1/32", "203.0.113.7/32"],
         )
 
+    def test_bypass_parser_rejects_loopback(self):
+        with self.assertRaisesRegex(network.NetworkError, "loopback"):
+            network.parse_bypass_document(
+                '{"version":1,"bypass_vpn":["127.0.0.0/8"]}'
+            )
+
+    def test_dns_server_cannot_be_in_bypass_list(self):
+        networks = [ipaddress.ip_network("1.1.1.0/24")]
+        with self.assertRaisesRegex(network.NetworkError, "DNS-сервер"):
+            network.ensure_dns_not_bypassed(networks, ["1.1.1.1"])
+
+    def test_probe_target_moves_away_from_bypass_network(self):
+        networks = [ipaddress.ip_network("1.1.1.1/32")]
+        self.assertEqual(network.select_probe_target(networks), "1.0.0.1")
+
     def test_bypass_parser_rejects_default_route(self):
         with self.assertRaisesRegex(network.NetworkError, "по умолчанию"):
             network.parse_bypass_document(

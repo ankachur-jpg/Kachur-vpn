@@ -112,6 +112,11 @@ class NetworkTests(unittest.TestCase):
             commands,
         )
         self.assertIn(
+            ("iptables", "-w", "2", "-A", "KACHUR_OUT", "-o", "wlp2s0", "-d",
+             "203.0.113.0/24", "-j", "ACCEPT"),
+            commands,
+        )
+        self.assertIn(
             ("iptables", "-w", "2", "-I", "OUTPUT", "2", "-j", "KACHUR_OUT"),
             commands,
         )
@@ -236,7 +241,7 @@ class NetworkTests(unittest.TestCase):
         firewall.assert_called_once_with()
 
     def test_probe_refuses_to_try_https_on_wrong_route(self):
-        with patch.object(network, "check_amnezia"), patch.object(network, "device", return_value=True), patch.object(
+        with patch.object(network, "check_amnezia"), patch.object(network, "load_bypass_networks", return_value=[]), patch.object(network, "device", return_value=True), patch.object(
             network, "route_device", return_value="wlp2s0",
         ), patch.object(network, "required") as run:
             with self.assertRaisesRegex(network.NetworkError, "не проходит через kch0"):
@@ -245,7 +250,8 @@ class NetworkTests(unittest.TestCase):
 
     def test_probe_checks_system_dns_with_https_bound_to_tunnel(self):
         with patch.object(network, "check_amnezia"), patch.object(
-            network, "device", return_value=True,
+            network, "load_bypass_networks", return_value=[],
+        ), patch.object(network, "device", return_value=True,
         ), patch.object(network, "route_device", return_value="kch0"), patch.object(
             network, "required",
         ) as required:

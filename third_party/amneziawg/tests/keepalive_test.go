@@ -127,18 +127,24 @@ func checkDelivery(t *testing.T, packet []byte, outbound chan<- []byte, inbound 
 	t.Helper()
 	timer := time.NewTimer(8 * time.Second)
 	defer timer.Stop()
-	select {
-	case outbound <- packet:
-	case <-timer.C:
-		t.Fatal("test tunnel did not accept a packet")
-	}
-	select {
-	case received := <-inbound:
-		if !bytes.Equal(received, packet) {
-			t.Fatal("test tunnel changed a packet")
+	// A UDP probe can be lost while the peers establish their first session.
+	retry := time.NewTicker(300 * time.Millisecond)
+	defer retry.Stop()
+	send := outbound
+	for {
+		select {
+		case send <- bytes.Clone(packet):
+			send = nil
+		case <-retry.C:
+			send = outbound
+		case received := <-inbound:
+			if !bytes.Equal(received, packet) {
+				t.Fatal("test tunnel changed a packet")
+			}
+			return
+		case <-timer.C:
+			t.Fatal("test tunnel did not deliver a packet")
 		}
-	case <-timer.C:
-		t.Fatal("test tunnel did not deliver a packet")
 	}
 }
 

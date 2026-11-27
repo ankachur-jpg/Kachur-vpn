@@ -198,6 +198,8 @@ class MainWindow(Adw.ApplicationWindow):
             "затем можно снова включить AmneziaVPN.",
             "kachur-subtitle",
         ))
+        from . import mobile_ui
+        mobile_ui.apply(self)
         GLib.idle_add(self.refresh)
         GLib.timeout_add_seconds(8, self._tick)
         if self._auto_connect_enabled:

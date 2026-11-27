@@ -1,0 +1,53 @@
+name: Fedora desktop interface
+on:
+  pull_request:
+    paths:
+      - 'desktop/fedora/**'
+      - '.github/workflows/fedora-interface.yml'
+permissions:
+  contents: read
+jobs:
+  gtk:
+    runs-on: ubuntu-latest
+    container: fedora:45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK test runtime
+        run: dnf -y install python3-gobject gtk4 libadwaita librsvg2 xorg-x11-server-Xvfb dbus-daemon git
+      - name: Run backend tests and exercise the graphical controls
+        working-directory: desktop/fedora
+        run: |
+          python3 -m unittest discover -s tests
+          Xvfb :99 -screen 0 1024x768x24 &
+          export DISPLAY=:99 GDK_BACKEND=x11 GSK_RENDERER=cairo
+          dbus-run-session -- python3 - <<'PY'
+          import gi
+          gi.require_version("Adw", "1")
+          gi.require_version("Gtk", "4.0")
+          from gi.repository import Adw, Gtk
+          from kachur_fedora.app import MainWindow
+          from kachur_fedora.backend import VPNState
+          app = Adw.Application(application_id="com.kachur.vpn.InterfaceTest")
+          assert app.register(None)
+          window = MainWindow(app)
+          footer = window.get_content().get_content()
+          stack = footer.get_first_child()
+          assert stack.get_visible_child_name() == "home"
+          nav = footer.get_last_child()
+          tab = nav.get_first_child()
+          for page in ("home", "diagnostics", "profiles"):
+              tab.emit("clicked")
+              assert stack.get_visible_child_name() == page
+              tab = tab.get_next_sibling()
+          stack.set_visible_child_name("settings")
+          assert window.bypass_import_button.is_ancestor(stack.get_visible_child())
+          window._show_state("kch0", VPNState(True, 2048, 4096), "")
+          assert "Отключить" in window.power.get_label()
+          assert not window.import_button.get_sensitive()
+          window._show_state("kch0", VPNState(False), "")
+          assert "Включить" in window.power.get_label()
+          assert window.import_button.get_sensitive()
+          window.message.set_text("Проверка")
+          assert window.message.get_visible()
+          window.destroy()
+          PY
